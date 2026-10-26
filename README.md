@@ -1,4 +1,4 @@
-# Closet Agent *(working title)*
+# Monster in the Closet
 
 > It noticed I haven't worn 60% of my closet and dressed me in it for today, without me asking.
 
