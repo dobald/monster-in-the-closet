@@ -1,0 +1,24 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Secrets
+.env
+
+# Personal media: this repo is public, so closet footage, selfies and
+# generated renders never get committed.
+data/
+out/
+*.mp4
+*.mov
+*.heic
+*.HEIC
+*.MOV
+*.MP4
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
