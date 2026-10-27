@@ -65,6 +65,33 @@ pip install -r requirements.txt
 copy .env.example .env          # then add MODEL_API_KEY
 ```
 
+## Backend API
+
+```bash
+uvicorn server.main:app --reload                       # fixture mode (default): never calls a paid API
+MONSTER_MODE=live uvicorn server.main:app --reload     # live: SAM 3.1 + Muse Spark, every result cached
+```
+
+Docs: http://127.0.0.1:8000/docs
+
+| Endpoint | What it does |
+|---|---|
+| `POST /api/scans` | 1–10 flat-lay photos (JPEG/PNG/WebP/HEIC) → cutouts → tags → wardrobe |
+| `GET /api/scans/{id}` | A past scan and its items |
+| `GET /api/wardrobe` | Garments; filter with `?category=top`, `?include_hidden=true` |
+| `GET` / `PATCH` / `DELETE /api/wardrobe/{id}` | One item; `PATCH` is "Fix tags", and later rescans keep those fixes |
+| `GET /api/cutouts/{id}.png` | The garment cutout |
+| `POST /api/dev/seed` | Import a spike run (`{"run": "out/<run>"}`) as wardrobe items and fixtures |
+
+**Spend-safe by design:**
+- **Content-addressed cache.** Every SAM scan and every tag is cached under a hash of its input plus a version string. A repeated photo costs nothing: the same scan took 29.5s live, then 0.1s from cache.
+- **Automatic invalidation.** Changing the tag schema or the scan settings invalidates old entries.
+- **Fixture mode.** It serves only recorded results. An unseen photo replays a recorded scan, so front-end work never spends credits.
+- **No duplicates.** Item ids are hashes of the cutout, so the same garment scanned twice is stored once. Wear history and tag fixes survive a rescan.
+- **Local data stays local.** The database, cutouts and cache live in `var/`, which git ignores.
+
+Tests (no API calls): `python tests/test_server.py` and `python tests/test_offline.py`
+
 ## Day-0 spike
 
 A go/no-go test on real photos. Put your media in `data/`, which git ignores. iPhone HEIC photos work.
@@ -113,8 +140,9 @@ python spike/spike.py render out/<run> --person data/me.jpg                     
 ## Layout
 
 ```
-closet/       shared code: config + provider routing, schema, SAM client, media, models
-spike/        Day-0 go/no-go script
-tests/        offline tests
-data/ out/    local only (ignored)
+closet/       shared code: config + provider routing, schema, SAM client, scan flow, media, models
+server/       FastAPI backend: settings, cache, SQLite store, scan pipeline, routes
+spike/        Day-0 go/no-go scripts and bake-offs
+tests/        offline tests (no API calls)
+data/ out/ var/   local only (ignored): footage, spike runs, the dev database and cache
 ```

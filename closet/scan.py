@@ -48,7 +48,11 @@ class ScanItem:
 
 
 async def scan_photo(client: AsyncOpenAI, path: Path, batch: int) -> list[ScanItem]:
-    photo = media.load_image(path)
+    return await scan_image(client, media.load_image(path), batch, path.name)
+
+
+async def scan_image(client: AsyncOpenAI, photo: Image.Image, batch: int, source: str) -> list[ScanItem]:
+    """Segment one upright, size-capped photo (see media.load_image) into garment cutouts."""
     small = photo.copy()
     small.thumbnail((SEGMENT_EDGE, SEGMENT_EDGE))
     run = await sam.segment(client, PROMPT, image_data_url=media.to_data_url(small))
@@ -73,7 +77,7 @@ async def scan_photo(client: AsyncOpenAI, path: Path, batch: int) -> list[ScanIt
             (b.left, b.top, b.right, b.bottom), small.width, small.height,
         )
         mask = media.upscale_mask(small_mask, photo.size)
-        item = ScanItem(path.name, batch, t.object_id, t.boxes[0], t.confidence.get(0), media.cutout(photo, mask))
+        item = ScanItem(source, batch, t.object_id, t.boxes[0], t.confidence.get(0), media.cutout(photo, mask))
         if t.key in dropped_as_dupe:
             item.kept, item.reason = False, "duplicate"
         elif item.confidence is not None and item.confidence < MIN_CONFIDENCE:

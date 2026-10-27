@@ -10,6 +10,7 @@ __pycache__/
 # generated renders never get committed.
 data/
 out/
+var/
 *.mp4
 *.mov
 *.heic

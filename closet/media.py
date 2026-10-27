@@ -26,8 +26,8 @@ def is_video(path: Path) -> bool:
     return path.suffix.lower() in VIDEO_EXTS
 
 
-def load_image(path: Path, max_edge: int = MAX_IMAGE_EDGE) -> Image.Image:
-    """Load a photo upright (EXIF rotation applied) and capped in size.
+def load_image(path: Path | io.BytesIO, max_edge: int = MAX_IMAGE_EDGE) -> Image.Image:
+    """Load a photo (file path or in-memory upload) upright, EXIF rotation applied, capped in size.
 
     SAM coordinates refer to the image we send, so we always cut from this same copy.
     """
