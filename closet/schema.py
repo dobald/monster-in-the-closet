@@ -43,12 +43,19 @@ class Garment(BaseModel):
     )
     confidence: float = Field(description="0-1: how sure you are this is one complete, correctly identified item.")
 
-    def render_line(self) -> str:
-        """How this item is described to Muse Image so the render keeps its real cut and print."""
+    def render_line(self, color_hex: str | None = None, short: bool = False) -> str:
+        """How this item is described to Muse Image so the render keeps its real cut, colour and print.
+
+        `color_hex` is the garment's measured colour from the photo: Day-0 renders drifted
+        on denim wash, and a measured value anchors it better than a colour name.
+        `short` drops the free-text details, which can trip the content filter.
+        """
         parts = [f"{self.primary_color} {self.subtype}", f"fit: {self.fit}"]
+        if color_hex:
+            parts.append(f"exact colour {color_hex}, do not lighten, fade or recolour it")
         if self.pattern != "solid":
             parts.append(f"pattern: {self.pattern}")
-        if self.distinctive_details and self.distinctive_details.lower() != "none":
+        if not short and self.distinctive_details and self.distinctive_details.lower() != "none":
             parts.append(f"details to keep exactly: {self.distinctive_details}")
         if self.print_side in ("front", "back"):
             parts.append(f"the main print is on the {self.print_side}")
@@ -92,7 +99,9 @@ class BodyProfile(BaseModel):
     def describe(self, detail: int = 2) -> str:
         """Mannequin wording for Muse Image. detail=2 is full, 1 drops body details, 0 is bare."""
         if self.style == "dress_form":
-            figure = "a full-body headless store mannequin in matte off-white fabric"
+            # "Headless mannequin" alone still came back with a featureless head on Day 0.
+            figure = ("a full-body store mannequin in matte off-white fabric with no head at all: "
+                      "the neck ends in a flat round cap just above the collar")
         else:
             figure = (f"a store display mannequin with a smooth featureless head, "
                       f"in a {SKIN_TONES[self.skin_tone][1]} matte finish")
@@ -102,6 +111,16 @@ class BodyProfile(BaseModel):
         elif detail == 1:
             figure += f", {SILHOUETTE_WORDS[self.silhouette]}"
         return figure if detail else "a white store display mannequin"
+
+
+class PersonPhotoCheck(BaseModel):
+    """Is a user's photo usable for the face version of try-on?"""
+
+    one_person: bool
+    full_body: bool = Field(description="Head to feet visible.")
+    face_visible: bool = Field(description="Face clearly visible, not covered by a phone, hand, hair or mask.")
+    ok: bool = Field(description="True only if all three checks pass.")
+    advice: str = Field(description="One friendly sentence telling the user how to retake it, or 'Looks good.'")
 
 
 class FidelityCheck(BaseModel):

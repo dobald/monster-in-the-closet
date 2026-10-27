@@ -185,6 +185,16 @@ def cutout(frame: Image.Image, mask: np.ndarray, pad: int = 8) -> Image.Image:
     return rgba.crop(box)
 
 
+def dominant_color(img: Image.Image) -> str:
+    """Median colour of a cutout's opaque pixels as #rrggbb (the garment's real shade)."""
+    rgba = np.asarray(img.convert("RGBA"))
+    opaque = rgba[rgba[..., 3] > 200][:, :3]
+    if len(opaque) == 0:
+        return "#808080"
+    r, g, b = np.median(opaque, axis=0).astype(int)
+    return f"#{r:02x}{g:02x}{b:02x}"
+
+
 def on_white(img: Image.Image) -> Image.Image:
     """Flatten an RGBA cutout onto white, for models that expect RGB input."""
     bg = Image.new("RGB", img.size, "white")

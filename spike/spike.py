@@ -344,6 +344,14 @@ def cmd_render(args: argparse.Namespace) -> None:
     garments = [Image.open(p) for p in garment_paths]
 
     person = media.load_image(Path(args.person), max_edge=1536) if args.person else None
+    photo_check = None
+    if person is not None:
+        photo_check = models.check_person_photo(person)
+        print(f"Photo check: {'ok' if photo_check.ok else 'NOT OK'} · {photo_check.advice}")
+        if not photo_check.ok and not args.force_photo:
+            print("  Skipping the face version (it would invent a face). Retake the photo, "
+                  "drop --person for a mannequin, or pass --force-photo.")
+            return
     profile = None if person is not None else _profile(args)
     mode = "person" if person is not None else "mannequin"
     print(f"Rendering ({mode}) with: {', '.join(p.name for p in garment_paths)}")
@@ -352,26 +360,30 @@ def cmd_render(args: argparse.Namespace) -> None:
     print(f"Using tags for {sum(t is not None for t in tags)}/{len(tags)} garments")
 
     models.save(media.flat_lay(garments), run_dir / "flatlay.png")
-    if person is not None:
-        img, status = models.render_on_person(person, garments, tags)
-    else:
-        img, status = models.render_on_mannequin(profile, garments, tags)
+    out = models.render_best(garments, tags, person=person, profile=profile, max_attempts=args.attempts)
+    best = out["best"]
+    for a in out["attempts"]:
+        print(f"  attempt {a['n']}: {a['status']} · min fidelity {a['score']}/5")
+        if a["image"] is not None:
+            models.save(a["image"], run_dir / f"render_{mode}_try{a['n']}.png")
+
     result = {
         "mode": mode,
+        "photo_check": photo_check.model_dump() if photo_check else None,
         "tags_used": [t.model_dump(include={"subtype", "fit", "print_side", "visible_side"}) if t else None for t in tags],
         "profile": profile.model_dump() if profile else None,
         "garments": [p.name for p in garment_paths],
-        "status": status,
-        "fidelity": [],
+        "status": best["status"],
+        "attempts": [{"n": a["n"], "status": a["status"], "score": a["score"], "had_corrections": bool(a["note"])}
+                     for a in out["attempts"]],
+        "best_attempt": best["n"],
+        "fidelity": [{"garment": p.name, **c.model_dump()} for p, c in zip(garment_paths, best["fidelity"])],
     }
-    if img is not None:
-        models.save(img, run_dir / f"render_{mode}.png")
-        for p, g in zip(garment_paths, garments):
-            check = models.judge_fidelity(g, img, person=person, profile=profile)
-            result["fidelity"].append({"garment": p.name, **check.model_dump()})
+    if best["image"] is not None:
+        models.save(best["image"], run_dir / f"render_{mode}.png")
     (run_dir / "render_report.json").write_text(json.dumps(result, indent=2))
     write_summary(run_dir)
-    print(f"  render: {status}")
+    print(f"  best: attempt {best['n']} · {best['status']} · min fidelity {best['score']}/5")
 
 
 # ---------------------------------------------------------------- summary
@@ -464,6 +476,8 @@ def cmd_all(args: argparse.Namespace) -> None:
     cmd_tag(args)
     args.garment = None
     args.no_tags = False
+    args.attempts = 2
+    args.force_photo = False
     cmd_render(args)
     print(f"\nRead {run_dir / 'SUMMARY.md'}")
 
@@ -507,6 +521,8 @@ def main() -> None:
     p.add_argument("run", help="out/<run> folder")
     p.add_argument("--garment", nargs="+", help="cutout PNGs (default: most patterned one)")
     p.add_argument("--no-tags", action="store_true", help="ignore wardrobe.json tags (A/B baseline)")
+    p.add_argument("--attempts", type=int, default=2, help="render + judge rounds; 1 disables self-correction")
+    p.add_argument("--force-photo", action="store_true", help="render the face version even if the photo check fails")
     tryon_args(p)
     p.set_defaults(fn=cmd_render)
 

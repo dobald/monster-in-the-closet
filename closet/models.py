@@ -11,8 +11,8 @@ import httpx
 from PIL import Image
 
 from . import config
-from .media import on_white, to_data_url
-from .schema import BodyProfile, FidelityCheck, Garment
+from .media import dominant_color, on_white, to_data_url
+from .schema import BodyProfile, FidelityCheck, Garment, PersonPhotoCheck
 
 TAG_INSTRUCTIONS = (
     "You catalog a person's real wardrobe. The image is one item cut out of a closet "
@@ -75,16 +75,25 @@ GARMENT_RULES = (
 )
 
 
-def outfit_brief(tags: list[Garment | None] | None, first_image: int = 1) -> tuple[str, str]:
-    """Per-item descriptions plus the camera view, from the wardrobe tags.
+def outfit_brief(
+    tags: list[Garment | None] | None,
+    garments: list[Image.Image] | None = None,
+    first_image: int = 1,
+    short: bool = False,
+) -> tuple[str, str]:
+    """Per-item descriptions plus the camera view, from the wardrobe tags and the cutouts.
 
-    Day-0 renders lost a tour tee's back print (rendered from the front) and slimmed
-    baggy jeans. Spelling out each item's fit and print side fixes both. Returns
-    (items text, view instruction); both empty strings when no tags are known.
+    Day-0 renders lost a tour tee's back print, slimmed baggy jeans and lightened denim.
+    Each line carries the item's fit, print side and measured colour. Returns
+    (items text, view instruction).
     """
-    if not tags or not any(tags):
-        return "", "Front view."
-    lines = [f"Image {first_image + i}: {t.render_line()}." for i, t in enumerate(tags) if t]
+    tags = tags or []
+    colors = [dominant_color(g) for g in garments] if garments else []
+    lines = []
+    for i, t in enumerate(tags):
+        if t:
+            hex_ = colors[i] if i < len(colors) else None
+            lines.append(f"Image {first_image + i}: {t.render_line(hex_, short=short)}.")
     back = [t for t in tags if t and t.print_side == "back"]
     front = [t for t in tags if t and t.print_side == "front"]
     if back and not front:
@@ -92,7 +101,13 @@ def outfit_brief(tags: list[Garment | None] | None, first_image: int = 1) -> tup
                 "exactly as in the item image.")
     else:
         view = "Front view."
-    return "Items: " + " ".join(lines), view
+    return ("Items: " + " ".join(lines)) if lines else "", view
+
+
+# Retry ladder when Muse Image's content filter refuses (refusals aren't billed).
+# Item details go before body details: Day-0 refusals came from long combined prompts,
+# and losing a free-text detail line costs less than losing the user's body shape.
+MANNEQUIN_LADDER = [(2, False), (2, True), (1, True), (0, True)]  # (body detail, short items)
 
 
 def render_on_person(
@@ -100,13 +115,18 @@ def render_on_person(
 ) -> tuple[Image.Image | None, str]:
     """Face version: dress the user's own photo in their real garments. Opt-in only."""
     images = [person] + [on_white(g) for g in garments]
-    items, view = outfit_brief(tags, first_image=2)
-    prompt = (
-        "Image 1 is a person. The other images are real clothing items they own. "
-        "Dress the person from image 1 in exactly these items. " + items + " " + GARMENT_RULES + " " + view +
-        " Keep the person's face, body shape and skin tone unchanged, natural pose. " + note
-    )
-    return _edit(images, prompt)
+    status = "error: not attempted"
+    for short in (False, True):
+        items, view = outfit_brief(tags, garments, first_image=2, short=short)
+        prompt = (
+            "Image 1 is a person. The other images are real clothing items they own. "
+            "Dress the person from image 1 in exactly these items. " + items + " " + GARMENT_RULES + " " + view +
+            " Keep the person's face, body shape and skin tone unchanged, natural pose. " + note
+        )
+        img, status = _edit(images, prompt)
+        if img is not None or not status.startswith("refused"):
+            return img, status if not short else f"{status} (short item details)"
+    return None, status
 
 
 def render_on_mannequin(
@@ -114,19 +134,78 @@ def render_on_mannequin(
 ) -> tuple[Image.Image | None, str]:
     """No-photo version: a faceless stand-in built from the user's body details.
 
-    If Muse Image's content filter objects, retry with fewer body details rather than
-    failing: a slightly less personalised mannequin beats no try-on. Refusals aren't billed.
+    On a content-filter refusal, walk MANNEQUIN_LADDER: shorten item details first, then
+    body details. A slightly less specific prompt beats no try-on.
     """
     images = [on_white(g) for g in garments]
-    items, view = outfit_brief(tags, first_image=1)
     status = "error: not attempted"
-    for detail in (2, 1, 0):
+    for detail, short in MANNEQUIN_LADDER:
+        items, view = outfit_brief(tags, garments, first_image=1, short=short)
         prompt = ("Show these exact clothing items worn together by " + profile.describe(detail) + ". "
                   + items + " " + GARMENT_RULES + " " + view + " " + note)
         img, status = _edit(images, prompt)
         if img is not None or not status.startswith("refused"):
-            return img, status if detail == 2 else f"{status} (simplified mannequin, detail={detail})"
+            simplified = (detail, short) != MANNEQUIN_LADDER[0]
+            return img, status if not simplified else f"{status} (simplified: body detail={detail}, short items={short})"
     return None, status
+
+
+def render_best(
+    garments: list[Image.Image],
+    tags: list[Garment | None] | None = None,
+    person: Image.Image | None = None,
+    profile: BodyProfile | None = None,
+    max_attempts: int = 2,
+    good_enough: int = 4,
+) -> dict:
+    """Generate, judge, and retry once with the judge's corrections; keep the best render.
+
+    The fidelity judge already writes concrete differences ("jeans lighter than the
+    reference, slim instead of wide-leg"). Feeding those back as corrections turns the
+    judge into a critic the generator listens to. Stops early once every garment scores
+    >= good_enough on colour, pattern, details and cut.
+    """
+    attempts, note = [], ""
+    for n in range(max_attempts):
+        if person is not None:
+            img, status = render_on_person(person, garments, tags, note)
+        else:
+            img, status = render_on_mannequin(profile, garments, tags, note)
+        attempt = {"n": n + 1, "status": status, "note": note, "image": img, "fidelity": [], "score": 0}
+        if img is not None:
+            checks = [judge_fidelity(g, img, person=person, profile=profile) for g in garments]
+            attempt["fidelity"] = checks
+            attempt["score"] = min(
+                min(c.color_preserved, c.pattern_preserved, c.details_preserved, c.cut_and_fit_preserved) for c in checks
+            )
+        attempts.append(attempt)
+        if img is None or attempt["score"] >= good_enough:
+            break
+        fixes = " ".join(f"Item {i + 1}: {c.differences}" for i, c in enumerate(attempt["fidelity"]))
+        note = ("Corrections from a reviewer who compared your previous attempt with the real items; "
+                "fix all of these: " + fixes[:1200])
+    best = max(attempts, key=lambda a: (a["image"] is not None, a["score"]))
+    return {"best": best, "attempts": attempts}
+
+
+def check_person_photo(photo: Image.Image) -> PersonPhotoCheck:
+    """Gate for the face version: a hidden face makes Muse Image invent one (seen on Day 0)."""
+    client = config.client_for("meta")
+    resp = client.responses.parse(
+        model=config.REASON_MODEL,
+        instructions=(
+            "You check a photo someone uploaded for a virtual try-on of their own clothes. It must show exactly "
+            "one person, full body head to feet, with the face clearly visible and not covered by a phone, hand, "
+            "hair or mask. Mirror selfies are fine if the phone does not cover the face."
+        ),
+        input=[{"role": "user", "content": [
+            {"type": "input_text", "text": "Check this photo."},
+            {"type": "input_image", "image_url": to_data_url(photo)},
+        ]}],
+        text_format=PersonPhotoCheck,
+        reasoning={"effort": "low"},
+    )
+    return resp.output_parsed
 
 
 def _edit(images: list[Image.Image], prompt: str) -> tuple[Image.Image | None, str]:
