@@ -15,7 +15,7 @@ from typing import Any, Literal
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel, ValidationError
 
 from closet import config
@@ -103,6 +103,12 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 def _item_out(d: dict) -> ItemOut:
     return ItemOut(**{k: v for k, v in d.items() if k in ItemOut.model_fields and k != "cutout_url"},
                    cutout_url=f"/api/cutouts/{d['id']}.png")
+
+
+@app.get("/", include_in_schema=False)
+def root() -> RedirectResponse:
+    """No front end yet: send the browser to the interactive API docs."""
+    return RedirectResponse("/docs")
 
 
 @app.get("/api/health")
