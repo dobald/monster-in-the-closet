@@ -88,7 +88,7 @@ def main() -> None:
         video = Path(tmp) / "closet.mp4"
         make_video(video)
         args = argparse.Namespace(media=str(video), prompts=list(FAKE_HITS) + ["dress"],
-                                  expected=2, dry_run=False)
+                                  expected=2, dry_run=False, raw_video=True)
         run_dir = spike.cmd_segment(args)
 
     report = json.loads((run_dir / "segment_report.json").read_text())

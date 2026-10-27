@@ -4,14 +4,15 @@ from __future__ import annotations
 
 import base64
 import io
+import re
 from pathlib import Path
 
-import openai
+import httpx
 from PIL import Image
 
 from . import config
 from .media import on_white, to_data_url
-from .schema import FidelityCheck, Garment
+from .schema import BodyProfile, FidelityCheck, Garment
 
 TAG_INSTRUCTIONS = (
     "You catalog a person's real wardrobe. The image is one item cut out of a closet "
@@ -58,65 +59,105 @@ def tag_garment(cutout: Image.Image, provider: str | None = None) -> Garment:
             ]},
         ],
         response_format=Garment,
+        # Muse Spark Open always reasons and defaults to xhigh. At "high" it can run away
+        # (32k tokens on one garment in our bake-off), so keep effort low and cap output.
+        reasoning_effort="low",
+        max_tokens=4000,
     )
     return resp.choices[0].message.parsed
 
 
-def render_outfit(person: Image.Image, garments: list[Image.Image], note: str = "") -> tuple[Image.Image | None, str]:
-    """Muse Image edit: dress the person in the exact garments. Returns (image, status)."""
-    client = config.client_for("meta")
+GARMENT_RULES = (
+    "Preserve every garment's color, pattern, logos, prints and cut precisely; "
+    "do not invent, add or restyle details. Full-body, front view, neutral studio background."
+)
 
-    def png(img: Image.Image, name: str) -> tuple[str, bytes, str]:
-        buf = io.BytesIO()
-        img.save(buf, format="PNG")
-        return (name, buf.getvalue(), "image/png")
 
-    files = [png(person, "person.png")] + [png(on_white(g), f"garment_{i}.png") for i, g in enumerate(garments)]
+def render_on_person(person: Image.Image, garments: list[Image.Image], note: str = "") -> tuple[Image.Image | None, str]:
+    """Face version: dress the user's own photo in their real garments. Opt-in only."""
+    images = [person] + [on_white(g) for g in garments]
     prompt = (
         "Image 1 is a person. The other images are real clothing items they own. "
-        "Dress the person from image 1 in exactly these items. Preserve every garment's "
-        "color, pattern, logos, prints and cut precisely; do not invent or restyle details. "
-        "Keep the person's face, body shape and skin tone unchanged. Full-body, neutral "
-        "studio background, natural pose. " + note
+        "Dress the person from image 1 in exactly these items. " + GARMENT_RULES +
+        " Keep the person's face, body shape and skin tone unchanged, natural pose. " + note
     )
-    try:
-        resp = client.images.edit(model=config.IMAGE_MODEL, image=files, prompt=prompt)
-    except openai.BadRequestError as e:
-        body = getattr(e, "body", None) or {}
-        code = body.get("code") if isinstance(body, dict) else None
-        return None, f"refused ({code or 'bad_request'}): {e.message}"
-
-    item = resp.data[0]
-    if getattr(item, "b64_json", None):
-        return Image.open(io.BytesIO(base64.b64decode(item.b64_json))).convert("RGB"), "ok"
-    if getattr(item, "url", None):
-        import urllib.request
-
-        with urllib.request.urlopen(item.url) as r:
-            return Image.open(io.BytesIO(r.read())).convert("RGB"), "ok"
-    return None, "no image in response"
+    return _edit(images, prompt)
 
 
-def judge_fidelity(garment: Image.Image, render: Image.Image, person: Image.Image) -> FidelityCheck:
-    """Ask Muse Spark how faithfully the render kept the real garment and person."""
+def render_on_mannequin(profile: BodyProfile, garments: list[Image.Image], note: str = "") -> tuple[Image.Image | None, str]:
+    """No-photo version: a faceless stand-in built from the user's body details.
+
+    If Muse Image's content filter objects, retry with fewer body details rather than
+    failing: a slightly less personalised mannequin beats no try-on. Refusals aren't billed.
+    """
+    images = [on_white(g) for g in garments]
+    status = "error: not attempted"
+    for detail in (2, 1, 0):
+        prompt = ("Show these exact clothing items worn together by " + profile.describe(detail) + ". "
+                  + GARMENT_RULES + " " + note)
+        img, status = _edit(images, prompt)
+        if img is not None or not status.startswith("refused"):
+            return img, status if detail == 2 else f"{status} (simplified mannequin, detail={detail})"
+    return None, status
+
+
+def _edit(images: list[Image.Image], prompt: str) -> tuple[Image.Image | None, str]:
+    """One Muse Image edit call. Returns (image, status).
+
+    Sent as JSON with an `images` array of data URLs: the OpenAI SDK's multipart upload
+    labels files `image[]`, which Meta rejects (it wants `image[0]`, `image[1]`, ...).
+    A content-policy refusal is a status, not an exception, so the spike can report it.
+    """
+    p = config.PROVIDERS["meta"]
+    body = {"model": config.IMAGE_MODEL, "prompt": prompt, "n": 1,
+            "images": [{"image_url": to_data_url(i, "PNG")} for i in images]}
+    r = httpx.post(p.base_url.rstrip("/") + "/images/edits", json=body,
+                   headers={"Authorization": f"Bearer {p.api_key}"}, timeout=180)
+    if r.status_code != 200:
+        try:
+            err = r.json().get("error", r.json())
+        except ValueError:
+            err = {"message": r.text[:300]}
+        code = err.get("code") if isinstance(err, dict) else None
+        msg = err.get("message", str(err)) if isinstance(err, dict) else str(err)
+        msg = re.sub(r"data:[^\"' ]{40,}", "data:…", msg)[:300]  # never echo image bytes back
+        if code == "content_policy_violation":
+            return None, f"refused (content_policy_violation): {msg}"
+        return None, f"error ({r.status_code}{', ' + code if code else ''}): {msg}"
+
+    item = r.json()["data"][0]
+    if item.get("b64_json"):
+        return Image.open(io.BytesIO(base64.b64decode(item["b64_json"]))).convert("RGB"), "ok"
+    if item.get("url"):
+        return Image.open(io.BytesIO(httpx.get(item["url"], timeout=60).content)).convert("RGB"), "ok"
+    return None, "error: no image in response"
+
+
+def judge_fidelity(
+    garment: Image.Image,
+    render: Image.Image,
+    person: Image.Image | None = None,
+    profile: BodyProfile | None = None,
+) -> FidelityCheck:
+    """Ask Muse Spark how faithfully the render kept the real garment and the person or mannequin spec."""
     client = config.client_for("meta")
+    if person is not None:
+        subject = "Image 2 is the real person, image 3 is the generated render."
+        images = [garment, person, render]
+    else:
+        subject = ("Image 2 is the generated render. It should show " + (profile.describe() if profile else "a faceless mannequin")
+                   + " with no human face.")
+        images = [garment, render]
+    content = [{"type": "input_text", "text": "Images in order:"}]
+    content += [{"type": "input_image", "image_url": to_data_url(on_white(img) if i == 0 else img)} for i, img in enumerate(images)]
     resp = client.responses.parse(
         model=config.REASON_MODEL,
         instructions=(
-            "You are a strict QA reviewer for a virtual try-on. Image 1 is the real garment, "
-            "image 2 is the real person, image 3 is the generated render. Score how faithfully "
-            "the render reproduces the real garment and person. Be harsh about changed "
-            "patterns, logos, colors or cut; those break the product's promise."
+            "You are a strict QA reviewer for a virtual try-on. Image 1 is the real garment. " + subject +
+            " Score how faithfully the render reproduces the real garment and the subject. Be harsh about "
+            "changed patterns, logos, colors or cut; those break the product's promise."
         ),
-        input=[{
-            "role": "user",
-            "content": [
-                {"type": "input_text", "text": "Garment, person, render:"},
-                {"type": "input_image", "image_url": to_data_url(on_white(garment))},
-                {"type": "input_image", "image_url": to_data_url(person)},
-                {"type": "input_image", "image_url": to_data_url(render)},
-            ],
-        }],
+        input=[{"role": "user", "content": content}],
         text_format=FidelityCheck,
         reasoning={"effort": "high"},
     )

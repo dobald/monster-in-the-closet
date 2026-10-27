@@ -73,6 +73,19 @@ async def upload_video(client: AsyncOpenAI, path: Path) -> str:
     return uploaded.id
 
 
+async def delete_upload(client: AsyncOpenAI, file_id: str) -> bool:
+    """Remove the closet video from Meta's file storage once SAM is done with it.
+
+    Closet footage can show a room, photos or other people, so we keep it no longer
+    than segmentation needs. Returns False (and the caller warns) if deletion fails.
+    """
+    try:
+        await client.files.delete(file_id)
+        return True
+    except Exception:
+        return False
+
+
 async def segment(
     client: AsyncOpenAI,
     prompt: str,
@@ -143,21 +156,24 @@ def iou(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> float:
     return inter / union if union else 0.0
 
 
-def cross_prompt_duplicates(tracks: list[Track], threshold: float = 0.6) -> list[tuple[str, str, float]]:
-    """Pairs of tracks from different prompts that cover the same pixels.
+def cross_prompt_duplicates(
+    tracks: list[Track], threshold: float = 0.6, same_prompt_threshold: float = 0.85
+) -> list[tuple[str, str, float]]:
+    """Pairs of tracks that cover the same pixels (mean IoU over shared frames).
 
-    e.g. one garment matched by both "shirt" and "jacket". Mean IoU over shared frames.
+    Across prompts: one garment matched by both "shirt" and "jacket".
+    Within a prompt: SAM occasionally returns the same object under several ids, so
+    near-identical boxes (stricter threshold) are merged too.
     """
     dupes = []
     for i, a in enumerate(tracks):
         for b in tracks[i + 1 :]:
-            if a.prompt == b.prompt:
-                continue
             shared = set(a.boxes) & set(b.boxes)
             if not shared:
                 continue
             score = sum(iou(a.boxes[f], b.boxes[f]) for f in shared) / len(shared)
-            if score >= threshold:
+            limit = same_prompt_threshold if a.prompt == b.prompt else threshold
+            if score >= limit:
                 dupes.append((a.key, b.key, round(score, 2)))
     return dupes
 

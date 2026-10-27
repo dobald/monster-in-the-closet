@@ -6,11 +6,16 @@ Answers three questions, written to out/<run>/SUMMARY.md:
   3. Does a Muse Image try-on stay faithful to a real garment, or get refused?
 
 Usage (from the repo root, venv active):
-  python spike/spike.py segment data/closet.mp4 --expected 25
+  python spike/spike.py scan data/batch1.heic data/batch2.heic --expected 10   # primary: flat-lay photos
   python spike/spike.py tag out/<run>
-  python spike/spike.py render out/<run> --person data/me.jpg
-  python spike/spike.py all data/closet.mp4 --person data/me.jpg --expected 25
-Add --dry-run to `segment` or `all` to see the cost estimate without calling the API.
+  python spike/spike.py render out/<run>                      # faceless mannequin (default)
+  python spike/spike.py render out/<run> --person data/me.jpg # opt-in face version
+  python spike/spike.py all data/batch1.heic data/batch2.heic --expected 10
+  python spike/spike.py segment data/closet.mov               # optional, slow: video inventory
+Add --dry-run to `scan`, `segment` or `all` to see the cost estimate without calling the API.
+
+Day-0 finding: flat-lay photos found 4/4 garments in ~15s for <1c; rail videos took
+27-39 minutes and produced mostly unusable slivers. Photos are the scan flow.
 """
 
 from __future__ import annotations
@@ -29,7 +34,8 @@ sys.path.insert(0, str(ROOT))
 import meta_sam_parser as sp  # noqa: E402
 from PIL import Image  # noqa: E402
 
-from closet import config, media, models, sam  # noqa: E402
+from closet import config, media, models, sam, scan  # noqa: E402
+from closet.schema import BodyProfile  # noqa: E402
 
 DEFAULT_PROMPTS = [
     "clothing",  # generic probe: if this alone works, we need far fewer requests
@@ -43,6 +49,7 @@ DEFAULT_PROMPTS = [
     "shoes",
 ]
 MIN_TRACK_FRAMES = 3  # video tracks shorter than this are probably flicker
+MIN_CONFIDENCE = 0.6  # below this SAM is usually matching background clutter, not a garment
 
 
 # ---------------------------------------------------------------- segment
@@ -61,6 +68,11 @@ async def _segment_all(path: Path, prompts: list[str]) -> tuple[list[sam.Segment
         jobs = [sam.segment(client, p, image_data_url=url) for p in prompts]
     print(f"Running SAM 3.1 for {len(prompts)} prompts in parallel ...")
     runs = await asyncio.gather(*jobs, return_exceptions=True)
+    if still is None:
+        if await sam.delete_upload(client, file_id):
+            print("Deleted the uploaded video from Meta's file storage.")
+        else:
+            print(f"  ! Could not delete uploaded file {file_id}; remove it manually.")
     ok = []
     for p, r in zip(prompts, runs):
         if isinstance(r, Exception):
@@ -92,6 +104,12 @@ def cmd_segment(args: argparse.Namespace) -> Path:
     if not path.exists():
         raise SystemExit(f"Not found: {path}")
     prompts = args.prompts or DEFAULT_PROMPTS
+    if media.is_video(path) and not args.raw_video:
+        before = media.video_info(path)
+        path = media.normalize_video(path)
+        after = media.video_info(path)
+        print(f"Normalized video: {before['width']}x{before['height']} {before['frames']} frames"
+              f" -> {after['width']}x{after['height']} {after['frames']} frames ({path.stat().st_size / 1e6:.1f} MB)")
     info = media.video_info(path) if media.is_video(path) else None
     cost = sam.estimate_cost(len(prompts), info["frames"] if info else None)
     print(f"Media: {path.name} {info or '(photo)'}")
@@ -131,6 +149,7 @@ def cmd_segment(args: argparse.Namespace) -> Path:
             "flicker": bool(info) and len(t.frames) < MIN_TRACK_FRAMES,
             "cutout": None,
         }
+        row["low_confidence"] = row["mean_confidence"] is not None and row["mean_confidence"] < MIN_CONFIDENCE
         mask_frames = [f for f in t.masks if f in t.boxes]
         if mask_frames:
             f = max(mask_frames, key=lambda fr: t.area(fr) * t.confidence.get(fr, 1.0))
@@ -155,7 +174,8 @@ def cmd_segment(args: argparse.Namespace) -> Path:
 
     dupes = sam.cross_prompt_duplicates(tracks)
     groups = _merge_groups(tracks, dupes)
-    real = [g for g in groups if not all(next(r for r in track_rows if r["key"] == k)["flicker"] for k in g)]
+    by_key = {r["key"]: r for r in track_rows}
+    real = [g for g in groups if not all(by_key[k]["flicker"] or by_key[k]["low_confidence"] for k in g)]
 
     report = {
         "media": str(path),
@@ -187,6 +207,68 @@ def cmd_segment(args: argparse.Namespace) -> Path:
     print(f"\nSegmented -> {run_dir}")
     print(f"  tracks: {len(tracks)}  unique estimate: {len(real)}  expected: {args.expected or '?'}")
     print(f"  cross-prompt duplicates: {len(dupes)}  mask modes: {sorted(mask_modes)}")
+    return run_dir
+
+
+# ---------------------------------------------------------------- scan (primary)
+
+
+def cmd_scan(args: argparse.Namespace) -> Path:
+    """Flat-lay photo batches: the primary capture flow."""
+    paths = [Path(p) for p in args.photos]
+    missing = [p for p in paths if not p.exists()]
+    if missing:
+        raise SystemExit(f"Not found: {', '.join(map(str, missing))}")
+    videos = [p for p in paths if media.is_video(p)]
+    if videos:
+        raise SystemExit(f"`scan` takes photos; use `segment` for video ({videos[0].name}).")
+    cost = scan.estimate_cost(len(paths))
+    print(f"Photos: {len(paths)} · prompt '{scan.PROMPT}' · estimated SAM cost ${cost:.3f}")
+    if args.dry_run:
+        return Path()
+
+    run_dir = ROOT / "out" / time.strftime("%Y%m%d-%H%M%S")
+    cut_dir = run_dir / "cutouts"
+    cut_dir.mkdir(parents=True)
+
+    t0 = time.time()
+    items = asyncio.run(scan.scan_photos(paths))
+    seconds = time.time() - t0
+
+    rows, sheet = [], []
+    for it in items:
+        row = {"key": f"p{it.batch}#{it.object_id}", "source": it.source, "confidence": it.confidence,
+               "kept": it.kept, "reason": it.reason, "cutout": None,
+               "flicker": False, "low_confidence": it.reason == "low confidence"}
+        if it.kept:
+            it.cutout.save(cut_dir / it.name)
+            row["cutout"] = it.name
+            sheet.append((f"{it.source} #{it.object_id}", it.cutout))
+        rows.append(row)
+
+    kept = [r for r in rows if r["kept"]]
+    report = {
+        "mode": "photo_batch",
+        "photos": [str(p) for p in paths],
+        "seconds": round(seconds, 1),
+        "estimated_cost_usd": round(cost, 3),
+        "sam_frame_size": None,
+        "local_frame_size": None,
+        "mask_modes_seen": ["bounds"],
+        "prompts": [{"prompt": scan.PROMPT, "tracks": len(rows), "max_objects_in_a_frame": 0,
+                     "hit_16_object_cap": False, "outcome": "completed", "diagnostics": []}],
+        "tracks": rows,
+        "cross_prompt_duplicates": [r["key"] for r in rows if r["reason"] == "duplicate"],
+        "unique_garments_estimate": len(kept),
+        "expected_garments": args.expected,
+    }
+    (run_dir / "segment_report.json").write_text(json.dumps(report, indent=2))
+    if sheet:
+        media.contact_sheet(sheet).save(run_dir / "contact_sheet.png")
+    write_summary(run_dir)
+    dropped = {r: sum(x["reason"] == r for x in rows) for r in ("duplicate", "low confidence", "too small")}
+    print(f"\nScanned -> {run_dir}")
+    print(f"  garments kept: {len(kept)}  expected: {args.expected or '?'}  dropped: {dropped}  ({seconds:.1f}s)")
     return run_dir
 
 
@@ -236,20 +318,38 @@ def _pick_test_garment(run_dir: Path) -> Path:
     return first
 
 
+def _profile(args: argparse.Namespace) -> BodyProfile:
+    return BodyProfile(height_cm=args.height, build=args.build, silhouette=args.silhouette,
+                       skin_tone=args.skin, style=args.form)
+
+
 def cmd_render(args: argparse.Namespace) -> None:
+    """Try-on test. With --person: the face version. Without: a faceless mannequin from body details."""
     run_dir = Path(args.run)
-    person = media.load_image(Path(args.person), max_edge=1536)
     garment_paths = [Path(g) for g in args.garment] if args.garment else [_pick_test_garment(run_dir)]
     garments = [Image.open(p) for p in garment_paths]
-    print(f"Rendering with: {', '.join(p.name for p in garment_paths)}")
+
+    person = media.load_image(Path(args.person), max_edge=1536) if args.person else None
+    profile = None if person is not None else _profile(args)
+    mode = "person" if person is not None else "mannequin"
+    print(f"Rendering ({mode}) with: {', '.join(p.name for p in garment_paths)}")
 
     models.save(media.flat_lay(garments), run_dir / "flatlay.png")
-    img, status = models.render_outfit(person, garments)
-    result = {"garments": [p.name for p in garment_paths], "status": status, "fidelity": []}
+    if person is not None:
+        img, status = models.render_on_person(person, garments)
+    else:
+        img, status = models.render_on_mannequin(profile, garments)
+    result = {
+        "mode": mode,
+        "profile": profile.model_dump() if profile else None,
+        "garments": [p.name for p in garment_paths],
+        "status": status,
+        "fidelity": [],
+    }
     if img is not None:
-        models.save(img, run_dir / "render.png")
+        models.save(img, run_dir / f"render_{mode}.png")
         for p, g in zip(garment_paths, garments):
-            check = models.judge_fidelity(g, img, person)
+            check = models.judge_fidelity(g, img, person=person, profile=profile)
             result["fidelity"].append({"garment": p.name, **check.model_dump()})
     (run_dir / "render_report.json").write_text(json.dumps(result, indent=2))
     write_summary(run_dir)
@@ -302,18 +402,20 @@ def write_summary(run_dir: Path) -> None:
 
     if ren.exists():
         r = json.loads(ren.read_text())
-        lines += ["## 3. Does the try-on stay faithful?", f"- Muse Image status: **{r['status']}**"]
+        lines += ["## 3. Does the try-on stay faithful?", f"- Mode: **{r.get('mode', 'person')}** · Muse Image status: **{r['status']}**"]
         for f in r["fidelity"]:
             lines.append(
                 f"- {f['garment']}: color {f['color_preserved']}/5, pattern {f['pattern_preserved']}/5, "
                 f"details {f['details_preserved']}/5, cut {f['cut_and_fit_preserved']}/5, "
                 f"identity {f['person_identity_preserved']}/5. {f['differences']}"
             )
-        if r["status"] != "ok":
+        if r["status"].startswith("error"):
+            q3 = None  # a bug or outage, not an answer about fidelity
+        elif r["status"] != "ok":
             q3 = False
         elif r["fidelity"]:
             q3 = all(min(f["color_preserved"], f["pattern_preserved"], f["details_preserved"]) >= 4 for f in r["fidelity"])
-        lines += ["- Compare render.png with flatlay.png (the always-faithful fallback).", ""]
+        lines += [f"- Compare render_{r.get('mode', 'person')}.png with flatlay.png (the always-faithful fallback).", ""]
 
     lines += [
         "## Verdict",
@@ -330,15 +432,20 @@ def write_summary(run_dir: Path) -> None:
 
 
 def cmd_all(args: argparse.Namespace) -> None:
-    run_dir = cmd_segment(args)
+    """Photos -> scan; a single video -> segment (optional, slow inventory path)."""
+    if len(args.media) == 1 and media.is_video(Path(args.media[0])):
+        args.media = args.media[0]
+        run_dir = cmd_segment(args)
+    else:
+        args.photos = args.media
+        run_dir = cmd_scan(args)
     if args.dry_run:
         return
     args.run = str(run_dir)
     args.provider = None
     cmd_tag(args)
-    if args.person:
-        args.garment = None
-        cmd_render(args)
+    args.garment = None
+    cmd_render(args)
     print(f"\nRead {run_dir / 'SUMMARY.md'}")
 
 
@@ -351,8 +458,15 @@ def main() -> None:
         p.add_argument("--prompts", nargs="+", help=f"noun phrases (default: {' '.join(DEFAULT_PROMPTS)})")
         p.add_argument("--expected", type=int, help="how many garments are really in the shot")
         p.add_argument("--dry-run", action="store_true", help="estimate cost only")
+        p.add_argument("--raw-video", action="store_true", help="upload the original video (skip 1280px/10fps normalizing)")
 
-    p = sub.add_parser("segment", help="SAM 3.1 -> cutouts + duplicate report")
+    p = sub.add_parser("scan", help="PRIMARY: flat-lay photo batches -> garment cutouts")
+    p.add_argument("photos", nargs="+", help="one photo per batch of 4-8 items laid flat")
+    p.add_argument("--expected", type=int, help="how many garments are really in the photos")
+    p.add_argument("--dry-run", action="store_true", help="estimate cost only")
+    p.set_defaults(fn=cmd_scan)
+
+    p = sub.add_parser("segment", help="optional/slow: one video or photo, multi-prompt, duplicate report")
     seg_args(p)
     p.set_defaults(fn=cmd_segment)
 
@@ -361,15 +475,28 @@ def main() -> None:
     p.add_argument("--provider", choices=["meta", "baseten"])
     p.set_defaults(fn=cmd_tag)
 
-    p = sub.add_parser("render", help="Muse Image try-on + fidelity check + flat-lay")
+    def tryon_args(p: argparse.ArgumentParser) -> None:
+        p.add_argument("--person", help="opt-in face version: a plain front-facing photo")
+        g = p.add_argument_group("mannequin (used when --person is not given)")
+        g.add_argument("--height", type=int, default=170, help="cm (default 170)")
+        g.add_argument("--build", default="regular", choices=["slim", "regular", "athletic", "curvy", "plus"])
+        g.add_argument("--silhouette", default="neutral", choices=["feminine", "masculine", "neutral"])
+        g.add_argument("--skin", type=int, default=4, choices=range(1, 9), metavar="1-8", help="skin tone swatch (default 4)")
+        g.add_argument("--form", default="faceless_figure", choices=["faceless_figure", "dress_form"])
+
+    p = sub.add_parser("render", help="try-on (face or mannequin) + fidelity check + flat-lay")
     p.add_argument("run", help="out/<run> folder")
-    p.add_argument("--person", required=True, help="plain front-facing photo of you")
     p.add_argument("--garment", nargs="+", help="cutout PNGs (default: most patterned one)")
+    tryon_args(p)
     p.set_defaults(fn=cmd_render)
 
-    p = sub.add_parser("all", help="segment -> tag -> render")
-    seg_args(p)
-    p.add_argument("--person", help="photo of you, to run the render test")
+    p = sub.add_parser("all", help="scan (photos) or segment (one video) -> tag -> render")
+    p.add_argument("media", nargs="+", help="flat-lay photos, or a single closet video")
+    p.add_argument("--prompts", nargs="+", help="video only: noun phrases")
+    p.add_argument("--expected", type=int, help="how many garments are really in the shot(s)")
+    p.add_argument("--dry-run", action="store_true", help="estimate cost only")
+    p.add_argument("--raw-video", action="store_true", help="video only: skip normalizing")
+    tryon_args(p)
     p.set_defaults(fn=cmd_all)
 
     args = ap.parse_args()

@@ -11,6 +11,13 @@ import cv2
 import numpy as np
 from PIL import Image, ImageDraw, ImageOps
 
+try:  # iPhone photos are HEIC; Pillow needs this plugin to open them.
+    from pillow_heif import register_heif_opener
+
+    register_heif_opener()
+except ImportError:
+    pass
+
 VIDEO_EXTS = {".mp4", ".mov", ".m4v"}
 MAX_IMAGE_EDGE = 2048
 
@@ -52,6 +59,45 @@ def video_info(path: Path) -> dict:
     }
     cap.release()
     return info
+
+
+def normalize_video(path: Path, max_edge: int = 1280, fps: float = 10.0) -> Path:
+    """Downscale and thin a phone video before upload; cached next to the source.
+
+    A 4K/30fps iPhone clip is ~100 MB and SAM bills per frame. 1280px at 10fps keeps
+    garments trackable for a third of the frames, and re-encoding bakes in the phone's
+    rotation so SAM and OpenCV agree on frame size. Output is MPEG-4 (accepted by SAM).
+    """
+    out_dir = path.parent / "_normalized"
+    out = out_dir / f"{path.stem}_{max_edge}px_{int(fps)}fps.mp4"
+    if out.exists():
+        return out
+    out_dir.mkdir(exist_ok=True)
+
+    cap = cv2.VideoCapture(str(path))
+    src_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    step = max(1, round(src_fps / fps))
+    writer = None
+    i = 0
+    while True:
+        ok, frame = cap.read()
+        if not ok:
+            break
+        if i % step == 0:
+            h, w = frame.shape[:2]
+            scale = min(1.0, max_edge / max(h, w))
+            if scale < 1:
+                frame = cv2.resize(frame, (int(w * scale) // 2 * 2, int(h * scale) // 2 * 2), interpolation=cv2.INTER_AREA)
+            if writer is None:
+                writer = cv2.VideoWriter(str(out), cv2.VideoWriter_fourcc(*"mp4v"), src_fps / step,
+                                         (frame.shape[1], frame.shape[0]))
+            writer.write(frame)
+        i += 1
+    cap.release()
+    if writer is None:
+        raise SystemExit(f"Could not read any frames from {path}")
+    writer.release()
+    return out
 
 
 def read_frame(path: Path, index: int) -> Image.Image:
@@ -97,8 +143,33 @@ def place_mask(
     return resized.astype(bool), "scaled_full_frame"
 
 
+def upscale_mask(mask: np.ndarray, size: tuple[int, int]) -> np.ndarray:
+    """Resize a boolean mask to (w, h), smoothing the edge so cutouts aren't jagged."""
+    if mask.shape[::-1] == tuple(size):
+        return mask
+    soft = cv2.resize(mask.astype(np.float32), size, interpolation=cv2.INTER_LINEAR)
+    return soft >= 0.5
+
+
+def fill_holes(mask: np.ndarray) -> np.ndarray:
+    """Fill enclosed gaps in a garment mask.
+
+    SAM often treats a printed graphic (e.g. photos on a tour tee) as a separate object and
+    leaves a hole. Real garments almost never have enclosed holes, so anything the
+    background can't reach from the image border belongs to the garment.
+    """
+    m = mask.astype(np.uint8) * 255
+    h, w = m.shape
+    flood = np.pad(m, 1)  # a 1px empty border guarantees the fill starts outside the garment
+    ff_mask = np.zeros((h + 4, w + 4), np.uint8)
+    cv2.floodFill(flood, ff_mask, (0, 0), 255)
+    holes = flood[1:-1, 1:-1] == 0
+    return mask | holes
+
+
 def cutout(frame: Image.Image, mask: np.ndarray, pad: int = 8) -> Image.Image:
-    """RGBA crop of just the masked garment on a transparent background."""
+    """RGBA crop of just the masked garment (holes filled) on a transparent background."""
+    mask = fill_holes(mask)
     rgba = frame.convert("RGBA")
     alpha = Image.fromarray((mask * 255).astype(np.uint8))
     rgba.putalpha(alpha)
