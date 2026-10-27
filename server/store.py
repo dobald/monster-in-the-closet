@@ -35,6 +35,40 @@ CREATE TABLE IF NOT EXISTS scans (
     item_ids      TEXT NOT NULL,         -- JSON list
     dropped       TEXT NOT NULL          -- JSON list of {source, reason}
 );
+CREATE TABLE IF NOT EXISTS plans (
+    id          TEXT PRIMARY KEY,
+    day         TEXT NOT NULL,
+    created_at  TEXT NOT NULL,
+    source      TEXT NOT NULL,           -- agent | rules | cache
+    plan        TEXT NOT NULL,           -- OutfitPlan JSON
+    trace       TEXT NOT NULL,           -- provider, tool calls, tokens
+    weather     TEXT NOT NULL,
+    calendar    TEXT NOT NULL,
+    notes       TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS wears (
+    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    day      TEXT NOT NULL,
+    item_id  TEXT NOT NULL,
+    plan_id  TEXT,
+    look     INTEGER
+);
+CREATE TABLE IF NOT EXISTS checkins (
+    id          TEXT PRIMARY KEY,
+    day         TEXT NOT NULL,
+    created_at  TEXT NOT NULL,
+    plan_id     TEXT,
+    answers     TEXT NOT NULL,           -- JSON: temperature, feeling, tags, note
+    reply       TEXT NOT NULL,
+    learned     TEXT                     -- CheckinLearning JSON
+);
+CREATE TABLE IF NOT EXISTS preferences (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at   TEXT NOT NULL,
+    text         TEXT NOT NULL UNIQUE,
+    applies_when TEXT,
+    checkin_id   TEXT
+);
 """
 
 
@@ -115,6 +149,77 @@ class Store:
         d["item_ids"] = json.loads(d["item_ids"])
         d["dropped"] = json.loads(d["dropped"])
         return d
+
+    # -- plans, wears, check-ins, preferences
+
+    def add_plan(self, plan: dict) -> None:
+        with self._lock, self._db:
+            self._db.execute(
+                "INSERT INTO plans VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (plan["id"], plan["day"], plan["created_at"], plan["source"], json.dumps(plan["plan"]),
+                 json.dumps(plan["trace"]), json.dumps(plan["weather"]), json.dumps(plan["calendar"]), plan["notes"]),
+            )
+
+    def get_plan(self, plan_id: str | None = None, day: str | None = None) -> dict | None:
+        """A plan by id, or the latest plan for a day."""
+        with self._lock:
+            if plan_id:
+                row = self._db.execute("SELECT * FROM plans WHERE id = ?", (plan_id,)).fetchone()
+            else:
+                row = self._db.execute("SELECT * FROM plans WHERE day = ? ORDER BY created_at DESC, rowid DESC LIMIT 1",
+                                       (day,)).fetchone()
+        if not row:
+            return None
+        d = dict(row)
+        for k in ("plan", "trace", "weather", "calendar"):
+            d[k] = json.loads(d[k])
+        return d
+
+    def record_wear(self, day: str, item_ids: list[str], plan_id: str | None, look: int | None) -> None:
+        with self._lock, self._db:
+            for item_id in item_ids:
+                self._db.execute("INSERT INTO wears (day, item_id, plan_id, look) VALUES (?, ?, ?, ?)",
+                                 (day, item_id, plan_id, look))
+                self._db.execute(
+                    "UPDATE items SET wear_count = wear_count + 1, "
+                    "last_worn = CASE WHEN last_worn IS NULL OR last_worn < ? THEN ? ELSE last_worn END WHERE id = ?",
+                    (day, day, item_id),
+                )
+
+    def worn_on(self, day: str) -> list[str]:
+        with self._lock:
+            rows = self._db.execute("SELECT DISTINCT item_id FROM wears WHERE day = ?", (day,)).fetchall()
+        return [r[0] for r in rows]
+
+    def wear_days(self) -> list[str]:
+        with self._lock:
+            return [r[0] for r in self._db.execute("SELECT DISTINCT day FROM wears ORDER BY day DESC").fetchall()]
+
+    def add_checkin(self, checkin: dict) -> None:
+        with self._lock, self._db:
+            self._db.execute(
+                "INSERT INTO checkins VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (checkin["id"], checkin["day"], checkin["created_at"], checkin.get("plan_id"),
+                 json.dumps(checkin["answers"]), checkin["reply"],
+                 json.dumps(checkin["learned"]) if checkin.get("learned") else None),
+            )
+
+    def add_preference(self, text: str, applies_when: str | None, checkin_id: str | None) -> bool:
+        """Store a learned preference; returns False if the exact text was already known."""
+        with self._lock, self._db:
+            cur = self._db.execute(
+                "INSERT OR IGNORE INTO preferences (created_at, text, applies_when, checkin_id) VALUES (?, ?, ?, ?)",
+                (now(), text.strip(), applies_when, checkin_id),
+            )
+            return cur.rowcount > 0
+
+    def list_preferences(self) -> list[dict]:
+        with self._lock:
+            return [dict(r) for r in self._db.execute("SELECT * FROM preferences ORDER BY id").fetchall()]
+
+    def delete_preference(self, pref_id: int) -> bool:
+        with self._lock, self._db:
+            return self._db.execute("DELETE FROM preferences WHERE id = ?", (pref_id,)).rowcount > 0
 
     def counts(self) -> dict:
         with self._lock:

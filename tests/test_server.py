@@ -120,6 +120,114 @@ def test_live_mode_caches(var_dir: Path) -> None:
         pipeline.scan.scan_image, pipeline.models.tag_garment, pipeline.config.async_client_for = orig
 
 
+BOTTOM = {**GARMENT, "category": "bottom", "subtype": "wide-leg jeans", "primary_color": "indigo",
+          "fit": "wide-leg, loose", "print_side": "unknown", "distinctive_details": "none"}
+
+
+def test_plan_wear_checkin(var_dir: Path, run_dir: Path) -> None:
+    """Fixture mode: rules planner, wearing a look, a check-in that learns, the oni's mood."""
+    # Make the seeded wardrobe a real outfit: one top, one bottom.
+    rows = json.loads((run_dir / "wardrobe.json").read_text())
+    rows[1] = {"file": rows[1]["file"], **BOTTOM}
+    (run_dir / "wardrobe.json").write_text(json.dumps(rows))
+    with client_for("fixture", var_dir) as c:
+        assert c.post("/api/plan", json={}).status_code == 409, "empty wardrobe -> clear error"
+        c.post("/api/dev/seed", json={"run": str(run_dir.relative_to(config.ROOT))})
+
+        plan = c.post("/api/plan", json={"day": "2026-10-28", "notes": "nothing too warm"}).json()
+        assert plan["source"] == "rules" and len(plan["looks"]) == 3, plan
+        assert all(len(l["items"]) >= 2 for l in plan["looks"]), plan["looks"]
+        assert {i["tags"]["category"] for i in plan["looks"][0]["items"]} >= {"top", "bottom"}
+        assert c.get("/api/plan", params={"day": "2026-10-28"}).json()["id"] == plan["id"]
+
+        worn = c.post(f"/api/plans/{plan['id']}/wear", json={"look": 0, "day": "2026-10-28"}).json()
+        assert worn["closet_alive_after"] == 100 and worn["streak_days"] == 1, worn
+        assert worn["rescued"] == [], "items added today can't be rescued"
+        assert c.post(f"/api/plans/{plan['id']}/wear", json={"look": 9}).status_code == 422
+        item = c.get(f"/api/wardrobe/{worn['look']['item_ids'][0]}").json()
+        assert item["wear_count"] == 1 and item["last_worn"] == "2026-10-28", item
+
+        ci = c.post("/api/checkins", json={"day": "2026-10-28", "temperature": "cold", "feeling": "good",
+                                           "tags": ["compliments"]}).json()
+        assert ci["oni_reply"] and ci["new_preference"] and set(ci["worn_item_ids"]) == set(worn["look"]["item_ids"]), ci
+        again = c.post("/api/checkins", json={"day": "2026-10-28", "temperature": "cold", "feeling": "good"}).json()
+        assert not again["new_preference"], "the same preference must not be stored twice"
+        prefs = c.get("/api/preferences").json()
+        assert len(prefs) == 1 and "cold" in prefs[0]["text"], prefs
+        assert c.post("/api/checkins", json={"temperature": "freezing", "feeling": "good"}).status_code == 422
+
+        oni = c.get("/api/oni", params={"day": "2026-10-28"}).json()
+        assert oni["closet_alive_pct"] == 100 and oni["garments"] == 2, oni
+        assert c.delete(f"/api/preferences/{prefs[0]['id']}").status_code == 204
+
+
+def _items_for_planner() -> list[dict]:
+    from closet.schema import Garment
+    top = Garment.model_validate(GARMENT).model_dump()
+    bottom = Garment.model_validate(BOTTOM).model_dump()
+    return [{"id": "aaa", "tags": top, "last_worn": None, "wear_count": 0},
+            {"id": "bbb", "tags": bottom, "last_worn": "2026-08-01", "wear_count": 3}]
+
+
+def test_validate_plan() -> None:
+    from closet import planner
+    from closet.schema import Look, OutfitPlan
+    items = _items_for_planner()
+    good = OutfitPlan(weather_summary="", plans_summary="", looks=[Look(name="a", item_ids=["aaa", "bbb"], why="", rediscovered_id="bbb")])
+    assert planner.validate_plan(good, items) == []
+    invented = OutfitPlan(weather_summary="", plans_summary="", looks=[Look(name="a", item_ids=["aaa", "zzz"], why="", rediscovered_id=None)])
+    assert "not in the wardrobe" in planner.validate_plan(invented, items)[0]
+    no_bottom = OutfitPlan(weather_summary="", plans_summary="", looks=[Look(name="a", item_ids=["aaa"], why="", rediscovered_id=None)])
+    assert "needs a top and a bottom" in planner.validate_plan(no_bottom, items)[0]
+    samey = OutfitPlan(weather_summary="", plans_summary="", looks=[Look(name="a", item_ids=["aaa", "bbb"], why="", rediscovered_id=None)] * 3)
+    assert planner.variety_problems(samey, items) == []  # only one top and one bottom owned: repeating is fine
+    second_top = {**items[0], "id": "ccc"}
+    assert "same top" in planner.variety_problems(samey, items + [second_top])[0]
+
+
+def test_agent_loop_and_repair() -> None:
+    """plan_with_agent with a scripted client: it must call tools, then repair an invented id."""
+    from types import SimpleNamespace as NS
+    from datetime import date as d
+    from closet import planner
+    from closet.schema import Look, OutfitPlan
+
+    usage = NS(prompt_tokens=100, completion_tokens=50)
+    tool_round = NS(choices=[NS(message=NS(content="", tool_calls=[
+        NS(id="t1", function=NS(name="get_weather", arguments="{}")),
+        NS(id="t2", function=NS(name="get_calendar", arguments="{}"))]))], usage=usage)
+    done_round = NS(choices=[NS(message=NS(content="ready", tool_calls=None))], usage=usage)
+    bad = OutfitPlan(weather_summary="w", plans_summary="p", looks=[Look(name="x", item_ids=["aaa", "nope"], why="", rediscovered_id=None)])
+    good = OutfitPlan(weather_summary="w", plans_summary="p", looks=[Look(name="x", item_ids=["aaa", "bbb"], why="ok", rediscovered_id="bbb")] * 3)
+    creates, parses = iter([tool_round, done_round]), iter([bad, good])
+    seen = {"tools": 0}
+
+    class FakeCompletions:
+        def create(self, **kw):
+            assert kw["tools"] and kw["reasoning_effort"] == "medium"
+            return next(creates)
+
+        def parse(self, **kw):
+            return NS(choices=[NS(message=NS(parsed=next(parses)))], usage=usage)
+
+    fake = NS(chat=NS(completions=FakeCompletions()))
+    orig = planner.config.client_for
+    planner.config.client_for = lambda provider="meta": fake
+    try:
+        def tool(name):
+            def fn():
+                seen["tools"] += 1
+                return {"tool": name}
+            return fn
+        plan, trace = planner.plan_with_agent(_items_for_planner(), [], d(2026, 10, 28), "",
+                                              {"get_weather": tool("w"), "get_calendar": tool("c")}, "baseten")
+    finally:
+        planner.config.client_for = orig
+    assert seen["tools"] == 2 and trace["tool_calls"] == ["get_weather", "get_calendar"], trace
+    assert trace["repairs"] == 1 and plan.looks[0].item_ids == ["aaa", "bbb"], (trace, plan)
+    assert trace["tokens_in"] == 400 and trace["tokens_out"] == 200, trace
+
+
 def main_() -> None:
     tmp = Path(tempfile.mkdtemp(prefix="monster-test-"))
     run_dir = config.ROOT / "out" / f"_test_seed_{tmp.name}"
@@ -134,7 +242,10 @@ def main_() -> None:
 
         test_fixture_mode(tmp / "fixture", run_dir)
         test_live_mode_caches(tmp / "live")
-        print("OK: fixture mode, seeding, tag fixes, caching and dedupe all behave.")
+        test_plan_wear_checkin(tmp / "plan", run_dir)
+        test_validate_plan()
+        test_agent_loop_and_repair()
+        print("OK: fixture mode, seeding, tag fixes, caching, dedupe, planning, wear, check-ins and the agent loop all behave.")
     finally:
         shutil.rmtree(run_dir, ignore_errors=True)
         shutil.rmtree(tmp, ignore_errors=True)

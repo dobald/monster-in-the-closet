@@ -92,6 +92,41 @@ Docs: http://127.0.0.1:8000/docs
 
 Tests (no API calls): `python tests/test_server.py` and `python tests/test_offline.py`
 
+## Morning planner and evening check-in
+
+The oni's brain runs on **Muse Spark Open via Baseten** as a small tool-using agent:
+
+1. It gets the wardrobe as compact text lines (tags, warmth, last worn), plus preferences learned from past check-ins.
+2. It calls two tools:
+   - `get_weather`: Open-Meteo, free, no key. Summarised into morning, afternoon and evening, using feels-like temperatures.
+   - `get_calendar`: a JSON or ICS file.
+3. It returns three looks in a fixed schema.
+4. Every look is checked against the real wardrobe for invented ids, missing bottoms and repeated items. One repair round fixes problems. The repair round also asks for variety when all three looks share a top, but variety alone never fails a plan.
+5. Fallbacks: if Spark Open fails, the same agent runs on Muse Spark 1.3; if that fails too, a rule-based picker answers. Fixture mode always uses the rules, so the morning screen never breaks and never spends credits.
+
+| Endpoint | What it does |
+|---|---|
+| `POST /api/plan` | Today's three looks. Body (all optional): `day`, `notes` (e.g. "nothing black"), `lat`/`lon`, `fresh` |
+| `GET /api/plan?day=` | The latest plan for a day |
+| `POST /api/plans/{id}/wear` | "Wear this" (`{"look": 0}`). Returns rescued pieces (idle ≥30 days), the closet-alive % before and after, the streak and the oni's mood |
+| `POST /api/checkins` | Evening check-in: `temperature` (cold, just_right, warm), `feeling` (meh, fine, good, iconic), `tags`, `note`. The oni replies and may learn one preference |
+| `GET /api/preferences`, `DELETE /api/preferences/{id}` | What the oni has learned; the user can make it forget |
+| `GET /api/oni` | Mood (restless, calm, proud, fed, sleepy), closet-alive %, forgotten count, streak |
+
+Plans are cached under a hash of everything they depend on: wardrobe and wear state, preferences, weather, calendar, notes and day. Asking twice is free, and wearing an outfit or learning a preference naturally produces a new plan.
+
+**Live run (11-garment closet, Toronto, feels like −2° in the morning, a smart-casual crit and a patio dinner):**
+- Spark Open called both tools and returned a valid plan in 9–20s, using about 5–7k tokens in and 2–5k out. 20s is the run with a repair round.
+- A "nothing black" note was respected.
+- A "studio was boiling" check-in was learned as "runs warm indoors". The next plan picked lighter tops for the studio.
+- An identical repeat request came from the cache in 0.0s.
+- Spark Open ignores field descriptions in the JSON schema, so length and voice rules (no ids, no "3/5", no raw temperatures) are spelled out in the prompt.
+
+Settings in `.env`:
+- `PLAN_PROVIDER`: `baseten` (default) or `meta`
+- `MONSTER_LAT` and `MONSTER_LON`: default location, Toronto
+- `MONSTER_CALENDAR`: JSON or ICS path; defaults to `fixtures/calendar_sample.json`
+
 ## Day-0 spike
 
 A go/no-go test on real photos. Put your media in `data/`, which git ignores. iPhone HEIC photos work.
@@ -124,8 +159,9 @@ Offline self-test (no API calls): `python tests/test_offline.py`
   - **My photo** (opt-in): the face version.
   - **Flat-lay only:** your real cutouts, no body at all.
 - **What leaves your device:**
-  - **Closet video → Meta, for SAM segmentation.** It's deleted from Meta's file storage as soon as segmentation finishes.
-  - **Garment cutouts → Baseten (Muse Spark Open), for tagging.**
+  - **Closet photos → Meta, for SAM segmentation.** The optional video path deletes the upload from Meta's file storage as soon as segmentation finishes.
+  - **Garment cutouts → Meta (Muse Spark 1.3), for tagging.**
+  - **Text only → Baseten (Muse Spark Open), for the morning plan and check-ins.** This is garment tags, today's weather, calendar event titles and times, and check-in answers. No images.
   - **Renders → Meta's Muse Image.** This includes your photo only if you chose the face version.
 - **Never sent to Meta's "contributor" models,** which may use inputs for training.
 - **Local files stay out of git.** Closet footage, selfies and renders live in `data/` and `out/`. Both folders are git-ignored and never committed. This repo is public.
@@ -140,8 +176,10 @@ python spike/spike.py render out/<run> --person data/me.jpg                     
 ## Layout
 
 ```
-closet/       shared code: config + provider routing, schema, SAM client, scan flow, media, models
-server/       FastAPI backend: settings, cache, SQLite store, scan pipeline, routes
+closet/       shared code: config + provider routing, schema, SAM client, scan flow, media, models,
+              planner agent + weather/calendar tools
+server/       FastAPI backend: settings, cache, SQLite store, scan pipeline, planning, routes
+fixtures/     sample calendar for the planner
 spike/        Day-0 go/no-go scripts and bake-offs
 tests/        offline tests (no API calls)
 data/ out/ var/   local only (ignored): footage, spike runs, the dev database and cache

@@ -9,8 +9,9 @@ Interactive docs at http://127.0.0.1:8000/docs
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from datetime import date
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -23,6 +24,7 @@ from closet.schema import Garment
 from . import settings as settings_mod
 from .cache import Cache
 from .pipeline import FixtureMissing, Pipeline
+from .planning import Planning, today_local
 from .store import Store
 
 MAX_PHOTOS = 10
@@ -61,6 +63,28 @@ class SeedIn(BaseModel):
     run: str  # a spike output folder under out/, e.g. "out/20261027-162912"
 
 
+class PlanIn(BaseModel):
+    day: date | None = None  # default: today
+    notes: str = ""  # e.g. "nothing black, dinner moved inside"
+    lat: float | None = None
+    lon: float | None = None
+    fresh: bool = False  # ignore the cached plan for identical inputs
+
+
+class WearIn(BaseModel):
+    look: int = 0
+    day: date | None = None
+
+
+class CheckinIn(BaseModel):
+    day: date | None = None
+    plan_id: str | None = None
+    temperature: Literal["cold", "just_right", "warm"]
+    feeling: Literal["meh", "fine", "good", "iconic"]
+    tags: list[str] = []  # e.g. ["compliments", "rained on"]
+    note: str = ""  # free text, e.g. a voice transcript
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     s = settings_mod.load()
@@ -68,6 +92,7 @@ async def lifespan(app: FastAPI):
     store = Store(s.db_path)
     app.state.settings, app.state.store = s, store
     app.state.pipeline = Pipeline(s, cache, store)
+    app.state.planning = Planning(s, cache, store)
     yield
 
 
@@ -166,6 +191,76 @@ def cutout(item_id: str) -> FileResponse:
     if not path.exists():
         raise HTTPException(404, "No such cutout.")
     return FileResponse(path, media_type="image/png", headers={"Cache-Control": "public, max-age=31536000, immutable"})
+
+
+def _plan_out(record: dict) -> dict:
+    """A stored plan with each look's items expanded, ready for the Today screen."""
+    store = app.state.store
+    out = {k: record[k] for k in ("id", "day", "created_at", "source", "notes", "weather", "calendar")}
+    out["trace"] = {k: v for k, v in record["trace"].items() if k in
+                    ("provider", "model", "tool_calls", "repairs", "seconds", "tokens_in", "tokens_out", "cached", "failures")}
+    plan = record["plan"]
+    out["weather_summary"], out["plans_summary"] = plan["weather_summary"], plan["plans_summary"]
+    out["looks"] = []
+    for look in plan["looks"]:
+        items = [store.get_item(i) for i in look["item_ids"]]
+        out["looks"].append({**look, "items": [_item_out(i).model_dump() for i in items if i]})
+    return out
+
+
+@app.post("/api/plan")
+async def make_plan(body: PlanIn | None = None) -> dict:
+    """The morning pick: three looks from the user's own clothes, for today's weather and plans."""
+    body = body or PlanIn()
+    try:
+        record = await app.state.planning.make_plan(body.day or today_local(), body.notes, body.lat, body.lon, body.fresh)
+    except ValueError as e:
+        raise HTTPException(409, str(e))
+    return _plan_out(record)
+
+
+@app.get("/api/plan")
+def latest_plan(day: date | None = None) -> dict:
+    record = app.state.store.get_plan(day=(day or today_local()).isoformat())
+    if not record:
+        raise HTTPException(404, "No plan for that day yet; POST /api/plan.")
+    return _plan_out(record)
+
+
+@app.post("/api/plans/{plan_id}/wear")
+def wear(plan_id: str, body: WearIn | None = None) -> dict:
+    """'Wear this': log the look, report rescued pieces, closet-alive change and the oni's mood."""
+    body = body or WearIn()
+    try:
+        return app.state.planning.wear(plan_id, body.look, body.day or today_local())
+    except KeyError as e:
+        raise HTTPException(404, str(e))
+    except IndexError as e:
+        raise HTTPException(422, str(e))
+
+
+@app.post("/api/checkins")
+async def checkin(body: CheckinIn) -> dict:
+    """Evening check-in: how the outfit went. The oni replies and may learn a preference."""
+    answers = body.model_dump(include={"temperature", "feeling", "tags", "note"})
+    return await app.state.planning.checkin(body.day or today_local(), answers, body.plan_id)
+
+
+@app.get("/api/preferences")
+def preferences() -> list[dict]:
+    return app.state.store.list_preferences()
+
+
+@app.delete("/api/preferences/{pref_id}", status_code=204)
+def forget_preference(pref_id: int) -> None:
+    if not app.state.store.delete_preference(pref_id):
+        raise HTTPException(404, "No such preference.")
+
+
+@app.get("/api/oni")
+def oni(day: date | None = None) -> dict:
+    """The oni's mood and the closet-alive meter, for the Today header."""
+    return app.state.planning.oni(day or today_local())
 
 
 @app.post("/api/dev/seed")

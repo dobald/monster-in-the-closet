@@ -110,6 +110,36 @@ class BodyProfile(BaseModel):
         return figure if detail else "a white store display mannequin"
 
 
+class Look(BaseModel):
+    """One outfit built only from wardrobe item ids."""
+
+    name: str = Field(description="Short label, e.g. 'Rediscovered overshirt' or 'Safe bet'.")
+    item_ids: list[str] = Field(description="Wardrobe ids only, exactly as given. One top + one bottom, or a dress; "
+                                            "add outerwear/shoes/accessories when useful.")
+    why: str = Field(description="Max 2 short sentences (under 35 words) in the oni's voice, like a stylish friend: "
+                                 "how it suits today's weather and plans. Natural words only: never mention ids, "
+                                 "warmth scores like '3/5', or raw readings like '-2C'; say 'a chilly morning' instead.")
+    rediscovered_id: str | None = Field(description="The longest-unworn item in this look, if it is one the user forgot.")
+
+
+class OutfitPlan(BaseModel):
+    """The morning pick: three looks, best first."""
+
+    weather_summary: str = Field(description="One short line, e.g. '2–11°, feels like -2° early, dry; overcast evening'.")
+    plans_summary: str = Field(description="One line about today's events, or 'No plans today'.")
+    looks: list[Look] = Field(description="Exactly 3 looks, best first. Look 1 should rescue a forgotten item when one fits.")
+
+
+class CheckinLearning(BaseModel):
+    """What the oni says back after an evening check-in, and what it learns."""
+
+    oni_reply: str = Field(description="Max 2 short sentences, under 35 words, warm and specific, in the oni's voice. "
+                                       "Say what you'll do differently tomorrow if anything.")
+    preference: str | None = Field(description="One durable rule for future picks, max 15 words, e.g. 'Add a warm layer "
+                                               "for evenings outdoors'. Null if nothing new was learned.")
+    applies_when: str | None = Field(description="Short condition, e.g. 'evenings below 8°C', or null if always.")
+
+
 class PersonPhotoCheck(BaseModel):
     """Is a user's photo usable for the face version of try-on?"""
 

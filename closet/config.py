@@ -61,6 +61,13 @@ SAM_MODEL = os.environ.get("SAM_MODEL", "sam-3.1")
 REASON_MODEL = os.environ.get("REASON_MODEL", "muse-spark-1.3")
 IMAGE_MODEL = os.environ.get("IMAGE_MODEL", "muse-image-1.0")
 TAG_PROVIDER = os.environ.get("TAG_PROVIDER", "meta")
+# The oni's "brain" (morning planner, check-in learning) runs on open weights by default:
+# Muse Spark Open via Baseten, falling back to Muse Spark 1.3 on Meta if Baseten fails.
+PLAN_PROVIDER = os.environ.get("PLAN_PROVIDER", "baseten")
+PLAN_MODEL = {
+    "baseten": os.environ.get("PLAN_MODEL_BASETEN", os.environ.get("TAG_MODEL_BASETEN", "meta-models/muse-spark-open-1026")),
+    "meta": os.environ.get("PLAN_MODEL_META", os.environ.get("REASON_MODEL", "muse-spark-1.3")),
+}
 TAG_MODEL = {
     "meta": os.environ.get("TAG_MODEL_META", "muse-spark-1.3"),
     "baseten": os.environ.get("TAG_MODEL_BASETEN", "meta-models/muse-spark-open-1026"),
