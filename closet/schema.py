@@ -10,6 +10,7 @@ Category = Literal["top", "bottom", "dress", "outerwear", "shoes", "accessory", 
 Pattern = Literal["solid", "striped", "checked", "floral", "graphic", "print", "other"]
 Formality = Literal["athleisure", "casual", "smart_casual", "business", "formal"]
 Season = Literal["spring", "summer", "fall", "winter"]
+Side = Literal["front", "back", "unknown"]
 
 
 class Garment(BaseModel):
@@ -27,10 +28,31 @@ class Garment(BaseModel):
     warmth: int = Field(description="1 = very light summer wear, 5 = heavy winter wear.")
     formality: Formality
     seasons: list[Season]
+    fit: str = Field(
+        description="Cut and fit as visible, e.g. 'wide-leg, loose, high-rise', 'boxy cropped', 'slim tapered', 'oversized'."
+    )
     distinctive_details: str = Field(
         description="Logos, prints, buttons, distressing: anything a render must preserve. 'none' if plain."
     )
+    visible_side: Side = Field(
+        description="Which side faces the camera. 'back' if you see a back print, the back yoke, or no front "
+        "placket/neckline dip; 'unknown' for shoes, accessories or unclear shots."
+    )
+    print_side: Side = Field(
+        description="Where the main print or logo is: 'front', 'back', or 'unknown' if plain or unsure."
+    )
     confidence: float = Field(description="0-1: how sure you are this is one complete, correctly identified item.")
+
+    def render_line(self) -> str:
+        """How this item is described to Muse Image so the render keeps its real cut and print."""
+        parts = [f"{self.primary_color} {self.subtype}", f"fit: {self.fit}"]
+        if self.pattern != "solid":
+            parts.append(f"pattern: {self.pattern}")
+        if self.distinctive_details and self.distinctive_details.lower() != "none":
+            parts.append(f"details to keep exactly: {self.distinctive_details}")
+        if self.print_side in ("front", "back"):
+            parts.append(f"the main print is on the {self.print_side}")
+        return "; ".join(parts)
 
     @field_validator("seasons", "secondary_colors")
     @classmethod

@@ -18,7 +18,9 @@ TAG_INSTRUCTIONS = (
     "You catalog a person's real wardrobe. The image is one item cut out of a closet "
     "photo or video by a segmentation model. Describe only what is visible. If it is not "
     "a single wearable item (a hanger, furniture, two items merged, or too blurry), set "
-    "is_garment=false and lower confidence."
+    "is_garment=false and lower confidence. Describe the fit as it really is (a loose, "
+    "wide-leg pair of jeans must not be called slim), and say which side faces the camera: "
+    "flat-lays are often shot back-up, and prints are often on the back."
 )
 
 
@@ -69,32 +71,58 @@ def tag_garment(cutout: Image.Image, provider: str | None = None) -> Garment:
 
 GARMENT_RULES = (
     "Preserve every garment's color, pattern, logos, prints and cut precisely; "
-    "do not invent, add or restyle details. Full-body, front view, neutral studio background."
+    "do not invent, add or restyle details. Full-body, neutral studio background."
 )
 
 
-def render_on_person(person: Image.Image, garments: list[Image.Image], note: str = "") -> tuple[Image.Image | None, str]:
+def outfit_brief(tags: list[Garment | None] | None, first_image: int = 1) -> tuple[str, str]:
+    """Per-item descriptions plus the camera view, from the wardrobe tags.
+
+    Day-0 renders lost a tour tee's back print (rendered from the front) and slimmed
+    baggy jeans. Spelling out each item's fit and print side fixes both. Returns
+    (items text, view instruction); both empty strings when no tags are known.
+    """
+    if not tags or not any(tags):
+        return "", "Front view."
+    lines = [f"Image {first_image + i}: {t.render_line()}." for i, t in enumerate(tags) if t]
+    back = [t for t in tags if t and t.print_side == "back"]
+    front = [t for t in tags if t and t.print_side == "front"]
+    if back and not front:
+        view = ("Back view: show the figure from behind so the back print is fully visible and legible, "
+                "exactly as in the item image.")
+    else:
+        view = "Front view."
+    return "Items: " + " ".join(lines), view
+
+
+def render_on_person(
+    person: Image.Image, garments: list[Image.Image], tags: list[Garment | None] | None = None, note: str = ""
+) -> tuple[Image.Image | None, str]:
     """Face version: dress the user's own photo in their real garments. Opt-in only."""
     images = [person] + [on_white(g) for g in garments]
+    items, view = outfit_brief(tags, first_image=2)
     prompt = (
         "Image 1 is a person. The other images are real clothing items they own. "
-        "Dress the person from image 1 in exactly these items. " + GARMENT_RULES +
+        "Dress the person from image 1 in exactly these items. " + items + " " + GARMENT_RULES + " " + view +
         " Keep the person's face, body shape and skin tone unchanged, natural pose. " + note
     )
     return _edit(images, prompt)
 
 
-def render_on_mannequin(profile: BodyProfile, garments: list[Image.Image], note: str = "") -> tuple[Image.Image | None, str]:
+def render_on_mannequin(
+    profile: BodyProfile, garments: list[Image.Image], tags: list[Garment | None] | None = None, note: str = ""
+) -> tuple[Image.Image | None, str]:
     """No-photo version: a faceless stand-in built from the user's body details.
 
     If Muse Image's content filter objects, retry with fewer body details rather than
     failing: a slightly less personalised mannequin beats no try-on. Refusals aren't billed.
     """
     images = [on_white(g) for g in garments]
+    items, view = outfit_brief(tags, first_image=1)
     status = "error: not attempted"
     for detail in (2, 1, 0):
         prompt = ("Show these exact clothing items worn together by " + profile.describe(detail) + ". "
-                  + GARMENT_RULES + " " + note)
+                  + items + " " + GARMENT_RULES + " " + view + " " + note)
         img, status = _edit(images, prompt)
         if img is not None or not status.startswith("refused"):
             return img, status if detail == 2 else f"{status} (simplified mannequin, detail={detail})"

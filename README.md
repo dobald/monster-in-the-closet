@@ -37,6 +37,9 @@ So the scan flow is flat-lay photo batches. Other findings:
 - **Tagging:** Spark 1.3 beat Spark Open on crumpled cutouts. Spark Open called tops "shoes" and is 4× slower, so it now handles text reasoning instead.
 - **Try-on:**
   - Mannequin renders keep prints and logos well.
+  - **Tag-aware renders.** Tagging records each item's fit and which side its print is on, and the try-on prompt uses both.
+    - The tour tee's back print came back: pattern fidelity went from 1/5 to 5/5 on the person and from 3/5 to 5/5 on the mannequin.
+    - Baggy jeans stopped being slimmed: cut went from 2/5 to 4/5.
   - The face version needs a clear photo, or Muse Image invents a face.
   - Body-detail wording can trip Muse Image's content filter, so the prompt falls back to simpler wording.
 

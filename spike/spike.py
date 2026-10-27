@@ -35,7 +35,7 @@ import meta_sam_parser as sp  # noqa: E402
 from PIL import Image  # noqa: E402
 
 from closet import config, media, models, sam, scan  # noqa: E402
-from closet.schema import BodyProfile  # noqa: E402
+from closet.schema import BodyProfile, Garment  # noqa: E402
 
 DEFAULT_PROMPTS = [
     "clothing",  # generic probe: if this alone works, we need far fewer requests
@@ -318,6 +318,20 @@ def _pick_test_garment(run_dir: Path) -> Path:
     return first
 
 
+def _tags_for(run_dir: Path, garment_paths: list[Path]) -> list[Garment | None]:
+    """Tags from the run's wardrobe.json, matched by cutout file name (None if untagged or outdated)."""
+    wardrobe = run_dir / "wardrobe.json"
+    rows = {r["file"]: r for r in json.loads(wardrobe.read_text())} if wardrobe.exists() else {}
+    tags = []
+    for p in garment_paths:
+        row = rows.get(p.name)
+        try:
+            tags.append(Garment.model_validate({k: v for k, v in row.items() if k in Garment.model_fields}) if row else None)
+        except ValueError:
+            tags.append(None)  # tagged before fit/side fields existed: re-run `tag`
+    return tags
+
+
 def _profile(args: argparse.Namespace) -> BodyProfile:
     return BodyProfile(height_cm=args.height, build=args.build, silhouette=args.silhouette,
                        skin_tone=args.skin, style=args.form)
@@ -334,13 +348,17 @@ def cmd_render(args: argparse.Namespace) -> None:
     mode = "person" if person is not None else "mannequin"
     print(f"Rendering ({mode}) with: {', '.join(p.name for p in garment_paths)}")
 
+    tags = _tags_for(run_dir, garment_paths) if not args.no_tags else [None] * len(garment_paths)
+    print(f"Using tags for {sum(t is not None for t in tags)}/{len(tags)} garments")
+
     models.save(media.flat_lay(garments), run_dir / "flatlay.png")
     if person is not None:
-        img, status = models.render_on_person(person, garments)
+        img, status = models.render_on_person(person, garments, tags)
     else:
-        img, status = models.render_on_mannequin(profile, garments)
+        img, status = models.render_on_mannequin(profile, garments, tags)
     result = {
         "mode": mode,
+        "tags_used": [t.model_dump(include={"subtype", "fit", "print_side", "visible_side"}) if t else None for t in tags],
         "profile": profile.model_dump() if profile else None,
         "garments": [p.name for p in garment_paths],
         "status": status,
@@ -445,6 +463,7 @@ def cmd_all(args: argparse.Namespace) -> None:
     args.provider = None
     cmd_tag(args)
     args.garment = None
+    args.no_tags = False
     cmd_render(args)
     print(f"\nRead {run_dir / 'SUMMARY.md'}")
 
@@ -487,6 +506,7 @@ def main() -> None:
     p = sub.add_parser("render", help="try-on (face or mannequin) + fidelity check + flat-lay")
     p.add_argument("run", help="out/<run> folder")
     p.add_argument("--garment", nargs="+", help="cutout PNGs (default: most patterned one)")
+    p.add_argument("--no-tags", action="store_true", help="ignore wardrobe.json tags (A/B baseline)")
     tryon_args(p)
     p.set_defaults(fn=cmd_render)
 
