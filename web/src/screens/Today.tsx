@@ -1,0 +1,508 @@
+import { useEffect, useState } from "react";
+import { api, ApiError, idleDays, shortName, type Item, type Plan, type WeatherPart } from "../api";
+import type { AppCtx } from "../App";
+import Oni, { MOOD_LABEL } from "../Oni";
+
+const WEEKDAY_JA = ["日曜日", "月曜日", "火曜日", "水曜日", "木曜日", "金曜日", "土曜日"];
+const LOOK_LETTERS = ["A", "B", "C"];
+
+// The adjust chips become plain-language notes for the planner.
+const ADJUST: { label: string; note: string }[] = [
+  { label: "Warmer", note: "warmer than usual" },
+  { label: "Dressier", note: "dress it up a bit" },
+  { label: "No black", note: "nothing black" },
+];
+
+type Load = { state: "loading" | "thinking" } | { state: "empty" } | { state: "error"; msg: string } | { state: "ready" };
+
+export default function Today({ ctx }: { ctx: AppCtx }) {
+  const [plan, setPlan] = useState<Plan | null>(null);
+  const [load, setLoad] = useState<Load>({ state: "loading" });
+  const [lookIndex, setLookIndex] = useState(0);
+  const [adjust, setAdjust] = useState<Record<string, boolean>>({});
+  const [wearing, setWearing] = useState(false);
+  const [wornLook, setWornLook] = useState<number | null>(null);
+
+  const replan = async (notes: string, fresh = false) => {
+    setLoad({ state: "thinking" });
+    try {
+      const p = await api.makePlan(notes, fresh);
+      setPlan(p);
+      setLookIndex(0);
+      setLoad({ state: "ready" });
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 409) setLoad({ state: "empty" });
+      else setLoad({ state: "error", msg: (e as Error).message });
+    }
+  };
+
+  useEffect(() => {
+    api
+      .latestPlan()
+      .then((p) => {
+        setPlan(p);
+        setAdjust(Object.fromEntries(ADJUST.map((a) => [a.label, p.notes.includes(a.note)])));
+        setLoad({ state: "ready" });
+      })
+      .catch((e) => {
+        if (e instanceof ApiError && e.status === 404) replan("");
+        else setLoad({ state: "error", msg: (e as Error).message });
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ctx.wardrobeVersion]);
+
+  const toggle = (label: string) => {
+    const next = { ...adjust, [label]: !adjust[label] };
+    setAdjust(next);
+    replan(ADJUST.filter((a) => next[a.label]).map((a) => a.note).join(", "));
+  };
+
+  const wear = async () => {
+    if (!plan) return;
+    setWearing(true);
+    try {
+      const result = await api.wear(plan.id, lookIndex);
+      setWornLook(lookIndex);
+      ctx.showWorn(result, plan, lookIndex);
+    } catch (e) {
+      ctx.toast((e as Error).message);
+    } finally {
+      setWearing(false);
+    }
+  };
+
+  const now = new Date();
+  const look = plan?.looks[lookIndex];
+  const mood = ctx.oni?.mood ?? "calm";
+
+  return (
+    <main className="screen" style={{ gap: 10 }}>
+      <span
+        aria-hidden="true"
+        className="display"
+        style={{
+          position: "absolute",
+          right: -14,
+          top: 8,
+          fontSize: 190,
+          color: "transparent",
+          WebkitTextStroke: "1.5px var(--ghost)",
+          pointerEvents: "none",
+        }}
+      >
+        {now.getDate()}
+      </span>
+
+      <div style={{ position: "relative", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <span className="label" style={{ fontWeight: 400 }}>
+          MONSTER IN THE CLOSET · <span lang="ja">東京</span>
+        </span>
+        {ctx.health?.mode === "fixture" && (
+          <span className="label" title="No paid model calls: plans come from the rule picker" style={{ border: "var(--line)", borderRadius: 4, padding: "2px 6px" }}>
+            DEMO DATA
+          </span>
+        )}
+      </div>
+
+      <header style={{ position: "relative", display: "flex", alignItems: "flex-end", gap: 10, minHeight: 72 }}>
+        <h1 className="display" style={{ fontSize: "clamp(46px, 14vw, 66px)" }}>
+          TODAY
+        </h1>
+        <span lang="ja" aria-hidden="true" className="vertical" style={{ fontSize: 18, paddingBottom: 2 }}>
+          {WEEKDAY_JA[now.getDay()]}
+        </span>
+        {plan && <WeatherDisc plan={plan} />}
+      </header>
+
+      <Ticker plan={plan} now={now} />
+
+      <button
+        type="button"
+        onClick={() => ctx.go("notes")}
+        style={{ display: "flex", alignItems: "center", gap: 12, border: 0, background: "transparent", padding: 0, textAlign: "left" }}
+        aria-label={`Oni is ${MOOD_LABEL[mood].en}. Closet alive ${ctx.oni?.closet_alive_pct ?? 0}%. Open notes.`}
+      >
+        <Oni mood={mood} size={52} />
+        <span style={{ flex: 1, display: "flex", flexDirection: "column", gap: 4 }}>
+          <span style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+            <span style={{ fontWeight: 700, fontSize: 14 }}>
+              {MOOD_LABEL[mood].en} <span lang="ja" style={{ fontWeight: 500, fontSize: 12 }}>{MOOD_LABEL[mood].ja}</span>
+            </span>
+            <span className="label">CLOSET ALIVE {ctx.oni?.closet_alive_pct ?? 0}%</span>
+          </span>
+          <AliveBar pct={ctx.oni?.closet_alive_pct ?? 0} />
+        </span>
+      </button>
+
+      {load.state === "empty" && <EmptyCloset go={() => ctx.go("scan")} />}
+      {load.state === "error" && (
+        <div className="card" style={{ padding: 14, display: "flex", flexDirection: "column", gap: 10 }}>
+          <strong>The oni couldn't plan today.</strong>
+          <span className="small">{load.msg}</span>
+          <button type="button" className="btn press" onClick={() => replan("")}>
+            Try again →
+          </button>
+        </div>
+      )}
+
+      {(load.state === "ready" || load.state === "thinking" || load.state === "loading") && (
+        <section aria-label="Today's outfit" style={{ position: "relative", marginTop: 14 }}>
+          <div
+            aria-hidden="true"
+            style={{ position: "absolute", inset: "6px -2px -6px 10px", border: "var(--line)", borderRadius: 12, background: "var(--paper)", transform: "rotate(3deg)" }}
+          >
+            {plan && plan.looks.length > 1 && (
+              <span
+                className="label"
+                style={{ position: "absolute", top: -1, right: 18, fontSize: 9, padding: "2px 6px", background: "var(--sumi)", color: "var(--washi)", borderRadius: "0 0 4px 4px" }}
+              >
+                NEXT · LOOK {LOOK_LETTERS[(lookIndex + 1) % plan.looks.length]}
+              </span>
+            )}
+          </div>
+          <div
+            aria-hidden="true"
+            style={{ position: "absolute", inset: "4px 8px -4px -2px", border: "var(--line)", borderRadius: 12, background: "var(--washi-2)", transform: "rotate(-2deg)" }}
+          />
+
+          <div className="card" style={{ position: "relative", padding: 10, display: "flex", flexDirection: "column", gap: 10 }}>
+            {lookIndex === 0 && load.state === "ready" && (
+              <span
+                lang="ja"
+                role="img"
+                aria-label="Picked by the monster"
+                className="hanko"
+                style={{ position: "absolute", zIndex: 3, top: -18, right: 10, animation: "stamp .5s cubic-bezier(.2,.9,.3,1.2) .4s both" }}
+              >
+                選
+              </span>
+            )}
+
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", paddingRight: 62 }}>
+              <span className="label" style={{ fontSize: 11 }}>
+                {lookIndex === 0 ? "TODAY'S PICK" : "ALSO GOOD"} · LOOK {LOOK_LETTERS[lookIndex]}
+              </span>
+              {plan && <span className="label" style={{ fontWeight: 400, fontSize: 11 }}>{lookIndex + 1} / {plan.looks.length}</span>}
+            </div>
+
+            {load.state !== "ready" || !look ? (
+              <Thinking slow={load.state === "thinking" && ctx.health?.mode === "live"} />
+            ) : (
+              <>
+                <Collage key={plan!.id + lookIndex} items={look.items} onOpen={ctx.openItem} />
+                <h2 className="display" style={{ fontSize: 22, lineHeight: 1.05 }}>{look.name}</h2>
+                <p style={{ margin: 0, fontSize: 14, lineHeight: 1.55 }}>{look.why}</p>
+              </>
+            )}
+
+            <div style={{ display: "flex", gap: 10, paddingRight: 3 }}>
+              {wornLook === lookIndex ? (
+                <button type="button" className="btn primary press" style={{ flex: 1.2 }} onClick={() => ctx.openCheckin(plan, lookIndex)}>
+                  Worn ✓ · Check in →
+                </button>
+              ) : (
+                <button type="button" className="btn primary press" style={{ flex: 1.2 }} disabled={load.state !== "ready" || wearing} onClick={wear}>
+                  {wearing ? "Logging…" : "Wear this →"}
+                </button>
+              )}
+              <button
+                type="button"
+                className="btn press"
+                style={{ flex: 1 }}
+                disabled={!plan || plan.looks.length < 2 || load.state !== "ready"}
+                onClick={() => plan && setLookIndex((lookIndex + 1) % plan.looks.length)}
+              >
+                Next look ⇄
+              </button>
+            </div>
+
+            <div role="group" aria-label="Adjust the pick" style={{ display: "flex", gap: 6, flexWrap: "wrap", paddingBottom: 2 }}>
+              {ADJUST.map((a) => (
+                <button
+                  key={a.label}
+                  type="button"
+                  className="chip press"
+                  aria-pressed={!!adjust[a.label]}
+                  disabled={load.state !== "ready"}
+                  onClick={() => toggle(a.label)}
+                >
+                  {a.label}
+                  {adjust[a.label] ? " ✓" : ""}
+                </button>
+              ))}
+              <button
+                type="button"
+                className="chip shu press"
+                disabled={load.state !== "ready"}
+                onClick={() => replan(plan?.notes ?? "", true)}
+                aria-label="Ask the oni for a fresh pick"
+              >
+                Re-roll ↻
+              </button>
+            </div>
+          </div>
+        </section>
+      )}
+
+      {plan && load.state === "ready" && <PlanSource plan={plan} />}
+
+      <button
+        type="button"
+        className="press"
+        onClick={() => ctx.openCheckin(plan, wornLook)}
+        style={{
+          marginTop: 8,
+          display: "flex",
+          alignItems: "center",
+          gap: 12,
+          padding: "10px 12px",
+          border: "var(--line)",
+          borderRadius: 12,
+          background: "var(--sumi)",
+          color: "var(--washi)",
+          boxShadow: "3px 3px 0 var(--ai)",
+          textAlign: "left",
+        }}
+      >
+        <span style={{ paddingRight: 14, paddingTop: 6 }}>
+          <Oni mood="sleepy" size={34} night />
+        </span>
+        <span style={{ flex: 1, display: "flex", flexDirection: "column", gap: 2 }}>
+          <span style={{ fontWeight: 700, fontSize: 14 }}>Evening check-in</span>
+          <span className="small" style={{ color: "var(--mist)" }}>Tell the oni how it went. It learns for tomorrow.</span>
+        </span>
+        <span aria-hidden="true" style={{ fontWeight: 700 }}>→</span>
+      </button>
+    </main>
+  );
+}
+
+// ------------------------------------------------------------------ pieces
+
+function partNow(plan: Plan): [string, WeatherPart] | null {
+  const parts = plan.weather.parts;
+  if (!parts) return null;
+  const h = new Date().getHours();
+  const key = h < 12 ? "morning" : h < 18 ? "afternoon" : "evening";
+  return [key, parts[key]];
+}
+
+function WeatherDisc({ plan }: { plan: Plan }) {
+  const p = partNow(plan);
+  if (!p) return null;
+  const [, part] = p;
+  const parts = plan.weather.parts!;
+  const rainy = (Object.entries(parts) as [string, WeatherPart][]).find(([, w]) => w.rain_chance_pct >= 40);
+  const sub = rainy ? `RAIN ${rainy[0].slice(0, 3).toUpperCase()}` : `FEELS ${Math.round(part.feels_like_low_c)}°`;
+  return (
+    <span
+      role="img"
+      aria-label={`${part.temp_c[1]} degrees, ${part.sky}. ${sub.toLowerCase()}`}
+      style={{
+        position: "absolute",
+        right: 0,
+        top: -14,
+        width: 66,
+        height: 66,
+        borderRadius: "50%",
+        background: "var(--ai)",
+        color: "#fff",
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
+        transform: "rotate(8deg)",
+        fontFamily: "var(--mono)",
+        fontSize: 9,
+        fontWeight: 700,
+        lineHeight: 1.25,
+        textAlign: "center",
+      }}
+    >
+      <span className="display" style={{ fontSize: 20 }}>{part.temp_c[1]}°</span>
+      <span>{sub}</span>
+    </span>
+  );
+}
+
+function Ticker({ plan, now }: { plan: Plan | null; now: Date }) {
+  const date = now.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" }).toUpperCase();
+  const bits = [date, "今日のコーデ"];
+  if (plan) {
+    plan.calendar.events.forEach((e) => bits.push(`${e.start} ${e.title.toUpperCase()}`));
+    if (!plan.calendar.events.length) bits.push("NO PLANS TODAY");
+    bits.push(plan.weather_summary.toUpperCase());
+  }
+  const text = bits.join(" ★ ") + " ★ ";
+  return (
+    <div
+      aria-label={"Today at a glance: " + bits.join(", ")}
+      style={{
+        margin: "0 -16px",
+        height: 30,
+        background: "var(--sumi)",
+        color: "var(--washi)",
+        overflow: "hidden",
+        display: "flex",
+        alignItems: "center",
+      }}
+    >
+      <div aria-hidden="true" className="label" style={{ display: "flex", whiteSpace: "nowrap", fontSize: 11, animation: "ticker 26s linear infinite" }}>
+        <span style={{ paddingRight: 24 }}>{text}</span>
+        <span style={{ paddingRight: 24 }}>{text}</span>
+      </div>
+    </div>
+  );
+}
+
+export function AliveBar({ pct, from }: { pct: number; from?: number }) {
+  return (
+    <div
+      role="img"
+      aria-label={`Closet alive ${pct}%`}
+      style={{ height: 10, borderRadius: 5, border: "var(--line)", overflow: "hidden", position: "relative", background: "var(--washi)" }}
+    >
+      <div
+        style={
+          {
+            height: "100%",
+            width: `${pct}%`,
+            background: pct < 25 ? "var(--shu)" : "var(--sumi)",
+            "--from": `${from ?? pct}%`,
+            "--to": `${pct}%`,
+            animation: from !== undefined ? "fill 1s ease-out .6s both" : undefined,
+          } as React.CSSProperties
+        }
+      />
+      {[25, 60].map((m) => (
+        <span key={m} aria-hidden="true" style={{ position: "absolute", left: `${m}%`, top: 0, bottom: 0, borderLeft: "1px dashed var(--ghost)" }} />
+      ))}
+    </div>
+  );
+}
+
+// Cutouts laid out like a collage on the riso halftone: slight tilts, overlapping, staggered rise.
+const FRAMES: Record<number, { l: number; t: number; w: number; h: number; r: number }[]> = {
+  1: [{ l: 22, t: 4, w: 56, h: 88, r: -3 }],
+  2: [
+    { l: 2, t: 4, w: 52, h: 86, r: -5 },
+    { l: 46, t: 8, w: 52, h: 86, r: 4 },
+  ],
+  3: [
+    { l: 0, t: 4, w: 42, h: 70, r: -6 },
+    { l: 30, t: 16, w: 40, h: 76, r: 3 },
+    { l: 60, t: 2, w: 40, h: 82, r: -3 },
+  ],
+  4: [
+    { l: 0, t: 2, w: 38, h: 62, r: -6 },
+    { l: 30, t: 10, w: 34, h: 54, r: 4 },
+    { l: 62, t: 2, w: 36, h: 70, r: -3 },
+    { l: 26, t: 58, w: 46, h: 38, r: 6 },
+  ],
+};
+
+// The unworn sticker goes by the item's own idle days, not the plan's rediscovered_id: the rule
+// picker treats never-worn items as forgotten, which would flag clothes scanned this morning.
+function Collage({ items, onOpen }: { items: Item[]; onOpen: (i: Item) => void }) {
+  const frames = FRAMES[Math.min(items.length, 4)] ?? FRAMES[4];
+  return (
+    <div className="halftone" style={{ position: "relative", height: 236, borderRadius: 8, overflow: "hidden", border: "var(--line)" }}>
+      {items.slice(0, 4).map((it, i) => {
+        const f = frames[i];
+        const idle = idleDays(it);
+        const badge = idle >= 30 ? `${idle}日 UNWORN` : null;
+        return (
+          <button
+            key={it.id}
+            type="button"
+            onClick={() => onOpen(it)}
+            aria-label={`${shortName(it)}, open details`}
+            style={
+              {
+                "--r": `${f.r}deg`,
+                position: "absolute",
+                left: `${f.l}%`,
+                top: `${f.t}%`,
+                width: `${f.w}%`,
+                height: `${f.h}%`,
+                zIndex: i + 1,
+                padding: 0,
+                border: 0,
+                background: "transparent",
+                transform: `rotate(${f.r}deg)`,
+                animation: `rise-tilt .45s ease-out ${0.08 * i}s both`,
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+              } as React.CSSProperties
+            }
+          >
+            <img className="cutout" src={it.cutout_url} alt="" style={{ flex: 1, minHeight: 0 }} />
+            <span
+              style={{
+                marginTop: -6,
+                background: "var(--washi)",
+                border: "var(--line)",
+                borderRadius: 4,
+                padding: "2px 6px",
+                fontSize: 11,
+                fontWeight: 700,
+                whiteSpace: "nowrap",
+                boxShadow: "2px 2px 0 var(--sumi)",
+              }}
+            >
+              {"①②③④"[i]} {shortName(it)}
+            </span>
+            {badge && (
+              <span className="sticker" style={{ position: "absolute", top: 6, left: -2, animation: "wobble 3s ease-in-out infinite" }}>
+                {badge}
+              </span>
+            )}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function Thinking({ slow }: { slow: boolean }) {
+  return (
+    <div
+      className="halftone"
+      style={{ height: 236, borderRadius: 8, border: "var(--line)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 10 }}
+    >
+      <Oni mood="calm" size={64} />
+      <span style={{ background: "var(--washi)", border: "var(--line)", borderRadius: 6, padding: "4px 10px", fontWeight: 700, fontSize: 13 }}>
+        <span className="spinner-dots">Checking the weather and your day</span>
+      </span>
+      {slow && <span className="label" style={{ background: "var(--washi)", padding: "2px 6px" }}>MUSE SPARK OPEN · ~15S</span>}
+    </div>
+  );
+}
+
+function PlanSource({ plan }: { plan: Plan }) {
+  const t = plan.trace;
+  const who =
+    plan.source === "rules" ? "RULE PICKER" : (t.model ?? t.provider ?? "MODEL").replace("meta-models/", "").toUpperCase();
+  const extra = t.cached || plan.source === "cache" ? "CACHED" : t.seconds ? `${t.seconds}S` : "";
+  return (
+    <span className="label muted" style={{ fontWeight: 400, textAlign: "center", marginTop: 6 }}>
+      PICKED BY {who}
+      {extra ? ` · ${extra}` : ""}
+      {plan.notes ? ` · “${plan.notes.toUpperCase()}”` : ""}
+    </span>
+  );
+}
+
+function EmptyCloset({ go }: { go: () => void }) {
+  return (
+    <div className="card" style={{ marginTop: 10, padding: 16, display: "flex", flexDirection: "column", alignItems: "center", gap: 12, textAlign: "center" }}>
+      <Oni mood="restless" size={80} />
+      <h2 className="display" style={{ fontSize: 26 }}>FEED ME CLOTHES</h2>
+      <p style={{ margin: 0, fontSize: 14, lineHeight: 1.5 }}>Your closet is empty. Lay 4–8 things flat, take a photo, and I'll pick tomorrow's outfit from what you own.</p>
+      <button type="button" className="btn shu press block" onClick={go}>
+        Scan my clothes →
+      </button>
+    </div>
+  );
+}

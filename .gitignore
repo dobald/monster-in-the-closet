@@ -23,3 +23,7 @@ var/
 Thumbs.db
 .vscode/
 .idea/
+
+# Front end
+web/node_modules/
+web/dist/

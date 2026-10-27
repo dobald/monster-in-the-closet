@@ -127,6 +127,25 @@ Settings in `.env`:
 - `MONSTER_LAT` and `MONSTER_LON`: default location, Toronto
 - `MONSTER_CALENDAR`: JSON or ICS path; defaults to `fixtures/calendar_sample.json`
 
+## Front end (mobile web)
+
+React + Vite in `web/`, styled after the Tokyo-street wireframes (washi, sumi, shu for the oni, ai for your day). Run the API and the dev server side by side; Vite proxies `/api` to port 8000:
+
+```bash
+uvicorn server.main:app --reload        # terminal 1 (add MONSTER_MODE=live for real model calls)
+cd web && npm install && npm run dev    # terminal 2 → http://localhost:5173
+```
+
+Screens:
+- **Today:** the oni's three looks as a cutout collage on riso halftone, with weather and calendar on a ticker. Chips (Warmer, Dressier, No black) re-plan with notes.
+- **Worn it!:** confetti, the fed oni, the 救 stamp for rescued pieces, closet-alive change and streak.
+- **Evening check-in:** temperature, feeling, tags and a note; shows the oni's reply and what it learned.
+- **Closet:** a searchable, filterable pinboard grid, with an item sheet showing tags and a remove action.
+- **Scan:** pick 1–10 flat-lay photos and build the closet.
+- **Notes:** the oni's mood, closet-alive meter and every learned preference. Each preference can be forgotten.
+
+In fixture mode the Today screen shows a DEMO DATA tag, and plans come from the rule picker.
+
 ## Day-0 spike
 
 A go/no-go test on real photos. Put your media in `data/`, which git ignores. iPhone HEIC photos work.
@@ -180,6 +199,7 @@ closet/       shared code: config + provider routing, schema, SAM client, scan f
               planner agent + weather/calendar tools
 server/       FastAPI backend: settings, cache, SQLite store, scan pipeline, planning, routes
 fixtures/     sample calendar for the planner
+web/          mobile web front end (React + Vite)
 spike/        Day-0 go/no-go scripts and bake-offs
 tests/        offline tests (no API calls)
 data/ out/ var/   local only (ignored): footage, spike runs, the dev database and cache
