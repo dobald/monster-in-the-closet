@@ -12,7 +12,16 @@ from PIL import Image
 
 from . import config
 from .media import dominant_color, on_white, to_data_url
-from .schema import BodyProfile, FidelityCheck, Garment, PersonPhotoCheck
+from .schema import (
+    SCORE_RUBRIC,
+    SILHOUETTE_WORDS,
+    SKIN_TONES,
+    BodyProfile,
+    FidelityCheck,
+    Garment,
+    PersonPhotoCheck,
+    RenderReview,
+)
 
 TAG_INSTRUCTIONS = (
     "You catalog a person's real wardrobe. The image is one item cut out of a closet "
@@ -160,30 +169,31 @@ def render_best(
 ) -> dict:
     """Generate, judge, and retry once with the judge's corrections; keep the best render.
 
-    The fidelity judge already writes concrete differences ("jeans lighter than the
-    reference, slim instead of wide-leg"). Feeding those back as corrections turns the
-    judge into a critic the generator listens to. Stops early once every garment scores
-    >= good_enough on colour, pattern, details and cut.
+    The judge writes concrete differences ("jeans should be darker indigo and wide-leg").
+    Feeding those back as corrections turns it into a critic the generator listens to.
+    Stops early once review_score() reaches good_enough.
     """
     attempts, note = [], ""
+    _, requested_view = outfit_brief(tags, garments)
     for n in range(max_attempts):
         if person is not None:
             img, status = render_on_person(person, garments, tags, note)
         else:
             img, status = render_on_mannequin(profile, garments, tags, note)
-        attempt = {"n": n + 1, "status": status, "note": note, "image": img, "fidelity": [], "score": 0}
+        attempt = {"n": n + 1, "status": status, "note": note, "image": img, "review": None, "score": 0}
         if img is not None:
-            checks = [judge_fidelity(g, img, person=person, profile=profile) for g in garments]
-            attempt["fidelity"] = checks
-            attempt["score"] = min(
-                min(c.color_preserved, c.pattern_preserved, c.details_preserved, c.cut_and_fit_preserved) for c in checks
-            )
+            review = judge_render(garments, img, person=person, profile=profile, requested_view=requested_view)
+            attempt["review"] = review
+            attempt["score"] = review_score(review, mannequin=person is None)
         attempts.append(attempt)
         if img is None or attempt["score"] >= good_enough:
             break
-        fixes = " ".join(f"Item {i + 1}: {c.differences}" for i, c in enumerate(attempt["fidelity"]))
+        review = attempt["review"]
+        fixes = [f"Item {g.garment}: {g.differences}" for g in review.garments if g.score < good_enough]
+        if review.subject.matches_request < good_enough or (person is None and review.subject.has_human_face):
+            fixes.append(f"Wearer: {review.subject.notes}")
         note = ("Corrections from a reviewer who compared your previous attempt with the real items; "
-                "fix all of these: " + fixes[:1200])
+                "fix all of these: " + " ".join(fixes)[:1200])
     best = max(attempts, key=lambda a: (a["image"] is not None, a["score"]))
     return {"best": best, "attempts": attempts}
 
@@ -240,35 +250,86 @@ def _edit(images: list[Image.Image], prompt: str) -> tuple[Image.Image | None, s
     return None, "error: no image in response"
 
 
-def judge_fidelity(
-    garment: Image.Image,
+def _mannequin_spec(profile: BodyProfile | None) -> str:
+    """What the judge should expect from a mannequin. Height is left out on purpose: it can't be
+    judged from a single studio shot, and asking for it made the old judge mark good renders 1-2/5."""
+    if profile is None:
+        return "a store display mannequin with a smooth featureless head"
+    return (f"a store display mannequin with a smooth featureless head (a head with no facial features is "
+            f"correct, not a flaw), {SKIN_TONES[profile.skin_tone][1]} matte finish, {profile.build} build, "
+            f"{SILHOUETTE_WORDS[profile.silhouette]}")
+
+
+def judge_render(
+    garments: list[Image.Image],
     render: Image.Image,
     person: Image.Image | None = None,
     profile: BodyProfile | None = None,
-) -> FidelityCheck:
-    """Ask Muse Spark how faithfully the render kept the real garment and the person or mannequin spec."""
+    requested_view: str = "Front view.",
+) -> RenderReview:
+    """One Muse Spark review of a whole render: every garment plus the wearer, in a single call.
+
+    Replaces per-garment judging, which re-scored the wearer once per garment and had no
+    rubric. Day-0 problems this fixes: good mannequins marked 1-2/5 (it was judging exact
+    height and treating the featureless head as a defect), illegible micro-print dragging an
+    otherwise right garment to 2/5, and back-view renders penalised for a front print they
+    can't show.
+    """
     client = config.client_for("meta")
+    n = len(garments)
+    images = [on_white(g) for g in garments]
     if person is not None:
-        subject = "Image 2 is the real person, image 3 is the generated render."
-        images = [garment, person, render]
+        images.append(person)
+        layout = (f"Images 1-{n} are the real garments. Image {n + 1} is the real person. "
+                  f"Image {n + 2} is the generated render of that person wearing them.")
+        wearer = "the same person as the photo, with the same face, body and skin tone"
     else:
-        subject = ("Image 2 is the generated render. It should show " + (profile.describe() if profile else "a faceless mannequin")
-                   + " with no human face.")
-        images = [garment, render]
-    content = [{"type": "input_text", "text": "Images in order:"}]
-    content += [{"type": "input_image", "image_url": to_data_url(on_white(img) if i == 0 else img)} for i, img in enumerate(images)]
+        layout = f"Images 1-{n} are the real garments. Image {n + 1} is the generated render of a mannequin wearing them."
+        wearer = _mannequin_spec(profile)
+    images.append(render)
+
+    content = [{"type": "input_text", "text": layout}]
+    content += [{"type": "input_image", "image_url": to_data_url(img)} for img in images]
     resp = client.responses.parse(
         model=config.REASON_MODEL,
         instructions=(
-            "You are a strict QA reviewer for a virtual try-on. Image 1 is the real garment. " + subject +
-            " Score how faithfully the render reproduces the real garment and the subject. Be harsh about "
-            "changed patterns, logos, colors or cut; those break the product's promise."
+            "You are a fair, exacting QA reviewer for a virtual try-on of someone's real clothes. "
+            f"The render should show {wearer}, wearing every real garment exactly. Return one garments row per "
+            "garment image, in order. For each, first write the concrete differences, then score. " + SCORE_RUBRIC +
+            " A changed fit is a clearly wrong cut and scores 2 or less (e.g. wide-leg or loose rendered as slim, "
+            "oversized as fitted, cropped as full length). "
+            f"The render was requested as: {requested_view} If it shows that requested side, don't penalise "
+            "details that only exist on the other side; mark view_explains_hidden_details. If it shows a different "
+            "side than requested and that hides a print or logo the item image shows, score details 2 or less: "
+            "the user would not see their print. Judge the wearer separately in `subject`. "
+            "Write differences as instructions a renderer could act on (e.g. 'jeans should be darker indigo and "
+            "wide-leg, not slim')."
         ),
         input=[{"role": "user", "content": content}],
-        text_format=FidelityCheck,
+        text_format=RenderReview,
         reasoning={"effort": "high"},
     )
-    return resp.output_parsed
+    review = resp.output_parsed
+    # Keep exactly one row per garment, in order, even if the model skipped or repeated one.
+    by_index = {g.garment: g for g in review.garments}
+    review.garments = [
+        by_index.get(i + 1) or FidelityCheck(
+            garment=i + 1, differences="not reviewed", garment_visible=False, view_explains_hidden_details=False,
+            color_preserved=1, pattern_preserved=1, details_preserved=1, cut_and_fit_preserved=1,
+        )
+        for i in range(n)
+    ]
+    return review
+
+
+def review_score(review: RenderReview, mannequin: bool) -> int:
+    """One number for 'is this render good enough': the weakest garment, capped by wearer problems."""
+    score = min(g.score for g in review.garments)
+    if mannequin and review.subject.has_human_face:
+        score = min(score, 2)  # a mannequin with a face breaks the privacy promise
+    if review.subject.matches_request <= 2:
+        score = min(score, review.subject.matches_request + 1)
+    return score
 
 
 def save(img: Image.Image, path: Path) -> Path:

@@ -377,7 +377,10 @@ def cmd_render(args: argparse.Namespace) -> None:
         "attempts": [{"n": a["n"], "status": a["status"], "score": a["score"], "had_corrections": bool(a["note"])}
                      for a in out["attempts"]],
         "best_attempt": best["n"],
-        "fidelity": [{"garment": p.name, **c.model_dump()} for p, c in zip(garment_paths, best["fidelity"])],
+        "score": best["score"],
+        "fidelity": [{**c.model_dump(), "garment": p.name} for p, c in zip(garment_paths, best["review"].garments)]
+        if best["review"] else [],
+        "subject": best["review"].subject.model_dump() if best["review"] else None,
     }
     if best["image"] is not None:
         models.save(best["image"], run_dir / f"render_{mode}.png")
@@ -436,15 +439,17 @@ def write_summary(run_dir: Path) -> None:
         for f in r["fidelity"]:
             lines.append(
                 f"- {f['garment']}: color {f['color_preserved']}/5, pattern {f['pattern_preserved']}/5, "
-                f"details {f['details_preserved']}/5, cut {f['cut_and_fit_preserved']}/5, "
-                f"identity {f['person_identity_preserved']}/5. {f['differences']}"
+                f"details {f['details_preserved']}/5, cut {f['cut_and_fit_preserved']}/5. {f['differences']}"
             )
+        if r.get("subject"):
+            s = r["subject"]
+            lines.append(f"- Wearer: matches request {s['matches_request']}/5, human face: {s['has_human_face']}. {s['notes']}")
         if r["status"].startswith("error"):
             q3 = None  # a bug or outage, not an answer about fidelity
         elif r["status"] != "ok":
             q3 = False
         elif r["fidelity"]:
-            q3 = all(min(f["color_preserved"], f["pattern_preserved"], f["details_preserved"]) >= 4 for f in r["fidelity"])
+            q3 = r.get("score", 0) >= 4
         lines += [f"- Compare render_{r.get('mode', 'person')}.png with flatlay.png (the always-faithful fallback).", ""]
 
     lines += [

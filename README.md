@@ -45,6 +45,11 @@ So the scan flow is flat-lay photo batches. Other findings:
     2. **Content-filter fallback.** On a refusal, item details are shortened before body details are dropped. The tee mannequin now keeps its height and build.
     3. **Self-correction.** A render scoring under 4/5 is redone once with the judge's corrections, and the better attempt is kept. One outfit went from 3/5 to 4/5, and keeping the better attempt stopped a worse retry from replacing the first.
     4. **Photo check for the face version.** It rejects photos where the face is hidden and asks for a retake, instead of letting Muse Image invent a face.
+    5. **Calibrated judge.** One Spark 1.3 review covers the whole render: every garment, plus the wearer judged once.
+       - It scores on an explicit 1–5 scale and is told which view was requested.
+       - It doesn't judge mannequin height.
+       - It treats a featureless head as correct and a changed fit as a 2.
+       - Results on saved renders: good ones now score 4–5 (the old judge gave good mannequins 1–2), bad ones still score 1–2, and repeat runs gave the same score.
   - **Known limits:**
     - Micro-text (tour dates) blurs in any generated render; the flat-lay stays the faithful view.
     - Muse Image wouldn't draw a truly headless mannequin, so the only mannequin is the faceless one.

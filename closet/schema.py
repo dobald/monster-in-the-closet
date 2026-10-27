@@ -120,15 +120,48 @@ class PersonPhotoCheck(BaseModel):
     advice: str = Field(description="One friendly sentence telling the user how to retake it, or 'Looks good.'")
 
 
-class FidelityCheck(BaseModel):
-    """Muse Spark's judgment of whether a render kept a real garment intact."""
+SCORE_RUBRIC = (
+    "Scores are 1-5: 5 = matches at normal viewing size; 4 = only minor differences you'd notice on close "
+    "inspection (e.g. tiny print text illegible while layout, headline text and graphics are right); "
+    "3 = noticeable difference but clearly the same item; 2 = a clearly wrong colour, pattern, detail or cut; "
+    "1 = missing or a different item."
+)
 
-    garment_visible: bool
-    color_preserved: int = Field(description="1-5")
-    pattern_preserved: int = Field(description="1-5")
-    details_preserved: int = Field(description="1-5, logos/prints/buttons")
-    cut_and_fit_preserved: int = Field(description="1-5")
-    person_identity_preserved: int = Field(
-        description="1-5, the person (or mannequin spec) is unchanged: face, body, skin tone. A mannequin must have no face."
+
+class FidelityCheck(BaseModel):
+    """The judge's verdict on one real garment inside a render. Field order matters:
+    the model writes its observations before it commits to scores."""
+
+    garment: int = Field(description="1-based index of the garment image this row is about.")
+    differences: str = Field(description="Concrete differences between the real garment and how it appears in the render; 'none' if it matches.")
+    garment_visible: bool = Field(description="False if the item does not appear in the render at all.")
+    view_explains_hidden_details: bool = Field(
+        description="True if a detail only looks missing because the render shows the other side (front vs back)."
     )
-    differences: str = Field(description="Concrete differences between the real garment and the render.")
+    color_preserved: int = Field(ge=1, le=5)
+    pattern_preserved: int = Field(ge=1, le=5)
+    details_preserved: int = Field(ge=1, le=5, description="Logos, prints, buttons, stitching.")
+    cut_and_fit_preserved: int = Field(ge=1, le=5)
+
+    @property
+    def score(self) -> int:
+        return min(self.color_preserved, self.pattern_preserved, self.details_preserved, self.cut_and_fit_preserved)
+
+
+class SubjectCheck(BaseModel):
+    """Who wears the outfit, judged once per render instead of once per garment."""
+
+    notes: str = Field(description="What you see about the wearer, before scoring.")
+    has_human_face: bool = Field(description="True if the wearer shows human facial features (eyes, nose, mouth).")
+    matches_request: int = Field(
+        ge=1, le=5,
+        description="Mannequin: finish colour and build/form roughly as requested (do not judge exact height). "
+                    "Person: same person as the photo, same body and skin tone.",
+    )
+
+
+class RenderReview(BaseModel):
+    """One Muse Spark review of a whole try-on render."""
+
+    garments: list[FidelityCheck]
+    subject: SubjectCheck
