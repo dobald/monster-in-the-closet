@@ -70,7 +70,6 @@ class Garment(BaseModel):
 
 Build = Literal["slim", "regular", "athletic", "curvy", "plus"]
 Silhouette = Literal["feminine", "masculine", "neutral"]
-FigureStyle = Literal["dress_form", "faceless_figure"]
 
 # Skin tone swatches the app offers, lightest to deepest. Muse Image gets them as a mannequin
 # *finish* colour: prompts mentioning "skin tone" next to body details trip its content filter.
@@ -88,23 +87,21 @@ SILHOUETTE_WORDS = {"feminine": "feminine form", "masculine": "masculine form", 
 
 
 class BodyProfile(BaseModel):
-    """A no-photo stand-in for try-on. Nothing here identifies the user."""
+    """A no-photo stand-in for try-on: a faceless mannequin. Nothing here identifies the user.
+
+    There is deliberately no headless variant: Muse Image kept drawing a featureless head
+    even when told "no head at all", and the faceless mannequin is already anonymous.
+    """
 
     height_cm: int = Field(ge=140, le=210)
     build: Build
     silhouette: Silhouette
-    skin_tone: int = Field(ge=1, le=8, description="Index into SKIN_TONES; ignored for a dress form.")
-    style: FigureStyle = "faceless_figure"
+    skin_tone: int = Field(ge=1, le=8, description="Index into SKIN_TONES, used as the mannequin's finish.")
 
     def describe(self, detail: int = 2) -> str:
         """Mannequin wording for Muse Image. detail=2 is full, 1 drops body details, 0 is bare."""
-        if self.style == "dress_form":
-            # "Headless mannequin" alone still came back with a featureless head on Day 0.
-            figure = ("a full-body store mannequin in matte off-white fabric with no head at all: "
-                      "the neck ends in a flat round cap just above the collar")
-        else:
-            figure = (f"a store display mannequin with a smooth featureless head, "
-                      f"in a {SKIN_TONES[self.skin_tone][1]} matte finish")
+        figure = (f"a store display mannequin with a smooth featureless head, "
+                  f"in a {SKIN_TONES[self.skin_tone][1]} matte finish")
         if detail >= 2:
             figure += (f", about {self.height_cm} cm tall, {self.build} build, "
                        f"{SILHOUETTE_WORDS[self.silhouette]}")

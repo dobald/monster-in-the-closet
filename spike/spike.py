@@ -334,7 +334,7 @@ def _tags_for(run_dir: Path, garment_paths: list[Path]) -> list[Garment | None]:
 
 def _profile(args: argparse.Namespace) -> BodyProfile:
     return BodyProfile(height_cm=args.height, build=args.build, silhouette=args.silhouette,
-                       skin_tone=args.skin, style=args.form)
+                       skin_tone=args.skin)
 
 
 def cmd_render(args: argparse.Namespace) -> None:
@@ -515,8 +515,6 @@ def main() -> None:
         g.add_argument("--build", default="regular", choices=["slim", "regular", "athletic", "curvy", "plus"])
         g.add_argument("--silhouette", default="neutral", choices=["feminine", "masculine", "neutral"])
         g.add_argument("--skin", type=int, default=4, choices=range(1, 9), metavar="1-8", help="skin tone swatch (default 4)")
-        g.add_argument("--form", default="faceless_figure", choices=["faceless_figure", "dress_form"])
-
     p = sub.add_parser("render", help="try-on (face or mannequin) + fidelity check + flat-lay")
     p.add_argument("run", help="out/<run> folder")
     p.add_argument("--garment", nargs="+", help="cutout PNGs (default: most patterned one)")

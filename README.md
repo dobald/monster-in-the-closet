@@ -43,11 +43,11 @@ So the scan flow is flat-lay photo batches. Other findings:
   - **Render pipeline:**
     1. **Measured colour.** The prompt gets each garment's real colour, measured from the photo. The jeans' wash went from 2/5 to 4/5.
     2. **Content-filter fallback.** On a refusal, item details are shortened before body details are dropped. The tee mannequin now keeps its height and build.
-    3. **Self-correction.** A render scoring under 4/5 is redone once with the judge's corrections, and the better attempt is kept. The headless outfit went from 3/5 to 4/5, and keeping the better attempt stopped a worse retry from replacing the first.
+    3. **Self-correction.** A render scoring under 4/5 is redone once with the judge's corrections, and the better attempt is kept. One outfit went from 3/5 to 4/5, and keeping the better attempt stopped a worse retry from replacing the first.
     4. **Photo check for the face version.** It rejects photos where the face is hidden and asks for a retake, instead of letting Muse Image invent a face.
   - **Known limits:**
     - Micro-text (tour dates) blurs in any generated render; the flat-lay stays the faithful view.
-    - Muse Image rarely produces a truly headless mannequin.
+    - Muse Image wouldn't draw a truly headless mannequin, so the only mannequin is the faceless one.
   - The face version needs a clear photo, or Muse Image invents a face.
   - Body-detail wording can trip Muse Image's content filter, so the prompt falls back to simpler wording.
 
