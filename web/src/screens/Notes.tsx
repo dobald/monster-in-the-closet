@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, type Preference, type TryOnMode, type TryOnProfile } from "../api";
+import { api, type Preference, type Profile, type TryOnMode, type TryOnProfile } from "../api";
 import type { AppCtx } from "../App";
 import Oni, { MOOD_LABEL } from "../Oni";
 import { getTheme, setTheme, type Theme } from "../theme";
@@ -14,12 +14,14 @@ export default function Notes({ ctx }: { ctx: AppCtx }) {
   const [prefs, setPrefs] = useState<Preference[] | null>(null);
   const [tryon, setTryon] = useState<TryOnProfile | null>(null);
   const [theme, setThemeState] = useState<Theme>(getTheme());
+  const [setup, setSetup] = useState<Profile | null>(null);
 
   useEffect(() => {
     api.preferences().then(setPrefs).catch(() => setPrefs([]));
   }, []);
   useEffect(() => {
     api.tryonProfile().then(setTryon).catch(() => {});
+    api.profile().then(setSetup).catch(() => {});
   }, [ctx.refreshKey]);
 
   const forget = async (p: Preference) => {
@@ -67,6 +69,22 @@ export default function Notes({ ctx }: { ctx: AppCtx }) {
         </div>
         <span className="small muted">Closet alive = pieces worn in the last 30 days. It sets the oni's mood. No guilt: one rescued piece flips it to Fed.</span>
       </div>
+
+      <button
+        type="button"
+        className="card press"
+        onClick={ctx.openSetup}
+        style={{ padding: "10px 12px", display: "flex", alignItems: "center", gap: 10, textAlign: "left", boxShadow: "3px 3px 0 var(--sumi)" }}
+      >
+        <span style={{ flex: 1, display: "flex", flexDirection: "column", gap: 2 }}>
+          <span className="label">YOUR SETUP · <span lang="ja">設定</span></span>
+          <strong style={{ fontSize: 14 }}>{setup?.location?.name ?? "Toronto (default)"}</strong>
+          <span className="small muted">
+            {setup ? { ics: `Calendar: ${setup.calendar_name ?? "your file"}`, sample: "Demo calendar", none: "No calendar" }[setup.calendar] : "…"}
+          </span>
+        </span>
+        <span aria-hidden="true" style={{ fontWeight: 700 }}>Edit →</span>
+      </button>
 
       <button
         type="button"

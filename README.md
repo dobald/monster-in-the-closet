@@ -229,6 +229,26 @@ The API itself only listens on localhost, and the phone reaches it through the V
 
 In the Claude desktop app, the `api-live` and `web-lan` launch configs do the same.
 
+## Getting started
+
+The first time the app opens, it walks through six short steps and saves as it goes, so leaving halfway loses nothing:
+
+1. **Hello:** the oni introduces itself, with three promises: only what you own, dressed for your day, and second-hand first.
+2. **Where are you?** City search using Open-Meteo geocoding (free, no key), or "Use my location" where the browser allows it. There's an optional "I run cold / warm" choice, which seeds a preference the planner reads from day one.
+3. **What's on?** Upload an `.ics` export from Google or Apple Calendar, use the demo calendar, or skip. Only event titles, times and places are read, and the file stays in `var/private/`.
+4. **Feed me clothes:** a flat-lay guide (4–8 pieces, no overlaps, print side up), then scanning in batches. **Next** unlocks once there's at least a top and a bottom, or a dress.
+5. **Who wears it?** The try-on setup, which can be skipped. Choosing the mannequin starts dressing your whole closet in the background.
+6. **Your first pick:** a real plan for today, with your weather and calendar. "See my day" finishes setup.
+
+Notes → **Your setup** reopens the flow from step 2, to change your city or calendar. The planner, thrift finder and check-ins now use the saved location and calendar; `.env` values are only the fallback before setup.
+
+| Endpoint | What it does |
+|---|---|
+| `GET` / `PUT /api/profile` | Location, calendar choice, onboarded flag; also closet counts and whether a plan is possible |
+| `POST` / `DELETE /api/profile/calendar` | Upload an `.ics` (checked for events, max 2 MB), or remove it |
+| `GET /api/geocode?q=` | City search for the weather location |
+| `POST /api/preferences` | A preference the user states directly, stored like learned ones |
+
 ## Front end (mobile web)
 
 React + Vite in `web/`, styled after the Tokyo-street wireframes (washi, sumi, shu for the oni, ai for your day). Run the API and the dev server side by side; Vite proxies `/api` to port 8000:

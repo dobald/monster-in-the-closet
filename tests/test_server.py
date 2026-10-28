@@ -315,6 +315,38 @@ def test_gap_math() -> None:
     assert out[0]["search_terms"] == ["wool coat"]
 
 
+def test_getting_started(var_dir: Path, run_dir: Path) -> None:
+    """Fixture mode: the profile drives onboarding, location and the calendar the planner reads."""
+    from datetime import date as d
+    with client_for("fixture", var_dir) as c:
+        p = c.get("/api/profile").json()
+        assert not p["onboarded"] and p["calendar"] == "sample" and not p["can_plan"] and p["wardrobe"] == {}, p
+        c.post("/api/dev/seed", json={"run": str(run_dir.relative_to(config.ROOT))})
+        assert c.get("/api/profile").json()["can_plan"], "a top and a bottom are enough to plan"
+
+        loc = {"name": "Osaka, Japan", "lat": 34.69, "lon": 135.5}
+        assert c.put("/api/profile", json={"location": loc}).json()["location"] == loc
+        assert main.app.state.planning.location() == (34.69, 135.5)
+        assert c.put("/api/profile", json={"calendar": "ics"}).status_code == 422, "no file uploaded yet"
+
+        today = d.today().strftime("%Y%m%d")
+        ics = ("BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nDTSTART:" + today + "T150000\r\nDTEND:" + today + "T160000\r\n"
+               "SUMMARY:Portfolio review\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n")
+        r = c.post("/api/profile/calendar", files={"file": ("work.ics", ics.encode(), "text/calendar")})
+        assert r.status_code == 200 and r.json()["events"] == 1 and r.json()["today"][0]["title"] == "Portfolio review", r.text
+        assert c.post("/api/profile/calendar", files={"file": ("x.ics", b"not a calendar", "text/calendar")}).status_code == 422
+        plan = c.post("/api/plan", json={}).json()
+        assert [e["title"] for e in plan["calendar"]["events"]] == ["Portfolio review"], plan["calendar"]
+        assert c.delete("/api/profile/calendar").json()["calendar"] == "none"
+        assert c.post("/api/plan", json={}).json()["calendar"]["events"] == [], "no calendar -> no events"
+
+        assert c.post("/api/preferences", json={"text": "Add a warmer layer; I run cold."}).json() == {"new": True}
+        assert c.post("/api/preferences", json={"text": "x"}).status_code == 422
+        assert c.get("/api/geocode", params={"q": "a"}).json() == [], "too short to search"
+        assert c.put("/api/profile", json={"onboarded": True}).json()["onboarded"]
+        assert c.get("/api/profile").json()["onboarded_at"]
+
+
 def test_cut_layer() -> None:
     """A layer is cropped to its garment, and its box says where it sits on the base."""
     import numpy as np
@@ -448,12 +480,13 @@ def main_() -> None:
         test_fixture_mode(tmp / "fixture", run_dir)
         test_live_mode_caches(tmp / "live")
         test_plan_wear_checkin(tmp / "plan", run_dir)
+        test_getting_started(tmp / "start", run_dir)
         test_validate_plan()
         test_gap_math()
         test_cut_layer()
         test_agent_loop_and_repair()
         test_duplicates(tmp / "dupes")
-        print("OK: fixture mode, seeding, tag fixes, caching, dedupe, planning, wear, check-ins, the agent loop, gap finder, try-on, layered try-on "
+        print("OK: fixture mode, seeding, tag fixes, caching, dedupe, planning, wear, check-ins, the agent loop, gap finder, try-on, layered try-on, getting started "
               "and cross-photo duplicates all behave.")
     finally:
         shutil.rmtree(run_dir, ignore_errors=True)

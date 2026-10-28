@@ -9,6 +9,8 @@ import Worn from "./screens/Worn";
 import Checkin from "./screens/Checkin";
 import ItemSheet from "./screens/ItemSheet";
 import TryOn from "./screens/TryOn";
+import Onboarding from "./screens/Onboarding";
+import Oni from "./Oni";
 
 export type Tab = "today" | "closet" | "scan" | "thrift" | "notes";
 
@@ -29,6 +31,7 @@ export interface AppCtx {
   showWorn: (result: WearResult, plan: Plan, lookIndex: number) => void;
   openTryOn: (plan: Plan, lookIndex: number) => void;
   openTryOnSetup: () => void;
+  openSetup: () => void; // reopen getting started (from the location step) to change location or calendar
   toast: (msg: string) => void;
   wardrobeVersion: number;
   bumpWardrobe: () => void;
@@ -43,6 +46,12 @@ export default function App() {
   const [toastMsg, setToastMsg] = useState<string | null>(null);
   const [wardrobeVersion, setWardrobeVersion] = useState(0);
   const [refreshKey, setRefreshKey] = useState(0);
+  // First run shows getting started instead of the tabs; "edit" reopens it from Notes.
+  const [onboarding, setOnboarding] = useState<"checking" | "first" | "edit" | null>("checking");
+
+  useEffect(() => {
+    api.profile().then((p) => setOnboarding(p.onboarded ? null : "first")).catch(() => setOnboarding(null));
+  }, []);
 
   const refreshOni = useCallback(() => {
     api.oni().then(setOni).catch(() => {});
@@ -71,6 +80,7 @@ export default function App() {
       setOverlay({ kind: "worn", result: { ...result, look: plan.looks[lookIndex] }, plan, lookIndex }),
     openTryOn: (plan, lookIndex) => setOverlay({ kind: "tryon", plan, lookIndex, setupOnly: false }),
     openTryOnSetup: () => setOverlay({ kind: "tryon", plan: null, lookIndex: null, setupOnly: true }),
+    openSetup: () => setOnboarding("edit"),
     toast: setToastMsg,
     wardrobeVersion,
     bumpWardrobe: () => setWardrobeVersion((v) => v + 1),
@@ -82,6 +92,35 @@ export default function App() {
     setRefreshKey((k) => k + 1);
     refreshOni();
   };
+
+  if (onboarding === "checking") {
+    return (
+      <div className="app" style={{ display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <Oni mood="calm" size={72} />
+      </div>
+    );
+  }
+  if (onboarding) {
+    return (
+      <div className="app">
+        <Onboarding
+          ctx={ctx}
+          editing={onboarding === "edit"}
+          onDone={() => {
+            setOnboarding(null);
+            setTab(onboarding === "edit" ? tab : "today");
+            setWardrobeVersion((v) => v + 1); // reload Today with the new setup
+            window.scrollTo({ top: 0 });
+          }}
+        />
+        {toastMsg && (
+          <div className="toast" role="status" style={{ bottom: 24 }}>
+            {toastMsg}
+          </div>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className="app">

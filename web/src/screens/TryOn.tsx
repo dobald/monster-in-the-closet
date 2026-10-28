@@ -103,7 +103,7 @@ export default function TryOn({ plan, lookIndex, setupOnly, ctx, onClose }: {
 
 // ------------------------------------------------------------------ setup
 
-function Setup({ profile, ctx, cta, onSaved }: { profile: TryOnProfile; ctx: AppCtx; cta: string; onSaved: (p: TryOnProfile) => void }) {
+export function Setup({ profile, ctx, cta, onSaved }: { profile: TryOnProfile; ctx: AppCtx; cta: string; onSaved: (p: TryOnProfile) => void }) {
   const [mode, setMode] = useState<TryOnMode>(profile.mode);
   const [body, setBody] = useState<BodyProfile>(profile.body ?? DEFAULT_BODY);
   const [photo, setPhoto] = useState(profile.photo);

@@ -35,6 +35,11 @@ MAX_PHOTO_BYTES = 25 * 1024 * 1024
 PHOTO_TYPES = {"image/jpeg", "image/png", "image/webp", "image/heic", "image/heif"}
 
 
+def now_iso() -> str:
+    from .store import now
+    return now()
+
+
 class ItemOut(BaseModel):
     id: str
     cutout_url: str
@@ -520,6 +525,111 @@ def render_file(name: str) -> FileResponse:
     if not path.exists():
         raise HTTPException(404, "No such render.")
     return FileResponse(path, media_type="image/png", headers={"Cache-Control": "private, max-age=86400"})
+
+
+class Location(BaseModel):
+    name: str
+    lat: float
+    lon: float
+
+
+class ProfileIn(BaseModel):
+    location: Location | None = None
+    calendar: Literal["none", "sample", "ics"] | None = None
+    onboarded: bool | None = None
+
+
+class PreferenceIn(BaseModel):
+    text: str
+    applies_when: str | None = None
+
+
+MAX_ICS_BYTES = 2 * 1024 * 1024
+_geocode_cache: dict[str, list[dict]] = {}
+
+
+def _profile_out() -> dict:
+    planning = app.state.planning
+    p = planning.profile()
+    counts = {}
+    for i in app.state.store.list_items():
+        if i["tags"]:
+            counts[i["tags"]["category"]] = counts.get(i["tags"]["category"], 0) + 1
+    return {**p, "wardrobe": counts, "can_plan": bool(counts.get("dress") or (counts.get("top") and counts.get("bottom"))),
+            "tryon": app.state.tryon.public_profile()}
+
+
+@app.get("/api/profile")
+def get_profile() -> dict:
+    """Getting-started state: location, calendar, whether onboarding is done, and closet counts."""
+    return _profile_out()
+
+
+@app.put("/api/profile")
+def put_profile(body: ProfileIn) -> dict:
+    if body.calendar == "ics" and not app.state.planning.calendar_path.exists():
+        raise HTTPException(422, "Upload a calendar file first.")
+    changes = body.model_dump(exclude_none=True)
+    if changes.get("onboarded"):
+        changes["onboarded_at"] = now_iso()
+    app.state.planning.update_profile(**changes)
+    return _profile_out()
+
+
+@app.post("/api/profile/calendar")
+async def upload_calendar(file: UploadFile = File(...)) -> dict:
+    """An .ics export (Google or Apple Calendar). Only event titles, times and places are read."""
+    data = await file.read()
+    if len(data) > MAX_ICS_BYTES:
+        raise HTTPException(413, "That calendar file is over 2 MB.")
+    from closet import tools
+    events = tools._parse_ics(data.decode("utf-8", errors="replace"))
+    if not events:
+        raise HTTPException(422, "No events found. Export an .ics file from your calendar app (unzip it first if it came as a .zip).")
+    path = app.state.planning.calendar_path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(data)
+    app.state.planning.update_profile(calendar="ics", calendar_name=file.filename or "calendar.ics")
+    today = app.state.planning.calendar(today_local())
+    return {"events": len(events), "today": today["events"], "profile": _profile_out()}
+
+
+@app.delete("/api/profile/calendar")
+def delete_calendar() -> dict:
+    app.state.planning.calendar_path.unlink(missing_ok=True)
+    app.state.planning.store.put_setting("profile", {**app.state.planning.profile(), "calendar": "none", "calendar_name": None})
+    return _profile_out()
+
+
+@app.get("/api/geocode")
+async def geocode(q: str) -> list[dict]:
+    """City search for the weather location (Open-Meteo geocoding: free, no key)."""
+    q = q.strip()
+    if len(q) < 2:
+        return []
+    if q.lower() in _geocode_cache:
+        return _geocode_cache[q.lower()]
+    import httpx
+    try:
+        async with httpx.AsyncClient(timeout=8) as client:
+            r = await client.get("https://geocoding-api.open-meteo.com/v1/search",
+                                 params={"name": q, "count": 6, "language": "en", "format": "json"})
+            r.raise_for_status()
+    except httpx.HTTPError:
+        raise HTTPException(502, "City search is unavailable right now.")
+    out = [{"name": ", ".join(x for x in (g.get("name"), g.get("admin1"), g.get("country")) if x),
+            "lat": round(g["latitude"], 4), "lon": round(g["longitude"], 4)} for g in r.json().get("results", [])]
+    _geocode_cache[q.lower()] = out
+    return out
+
+
+@app.post("/api/preferences")
+def add_preference(body: PreferenceIn) -> dict:
+    """A preference the user states directly (getting started), stored like learned ones."""
+    text = body.text.strip()
+    if not 3 <= len(text) <= 200:
+        raise HTTPException(422, "Preferences are 3-200 characters.")
+    return {"new": app.state.store.add_preference(text, body.applies_when, None)}
 
 
 @app.get("/api/oni")

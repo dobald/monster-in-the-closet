@@ -233,6 +233,22 @@ export interface LayersStatus {
   note: string | null;
 }
 
+export interface Place {
+  name: string;
+  lat: number;
+  lon: number;
+}
+
+export interface Profile {
+  location: Place | null;
+  calendar: "none" | "sample" | "ics";
+  calendar_name: string | null;
+  onboarded: boolean;
+  wardrobe: Partial<Record<Category, number>>;
+  can_plan: boolean; // a top + a bottom, or a dress
+  tryon: TryOnProfile;
+}
+
 export interface Health {
   ok: boolean;
   mode: "fixture" | "live";
@@ -304,6 +320,18 @@ export const api = {
     call<{ id: number }>("/api/thrift", json("POST", { piece, status })),
   setThrift: (id: number, status: ThriftStatus) => call<void>(`/api/thrift/${id}`, json("PATCH", { status })),
   removeThrift: (id: number) => call<void>(`/api/thrift/${id}`, { method: "DELETE" }),
+  profile: () => call<Profile>("/api/profile"),
+  updateProfile: (changes: { location?: Place; calendar?: Profile["calendar"]; onboarded?: boolean }) =>
+    call<Profile>("/api/profile", json("PUT", changes)),
+  uploadCalendar: (file: File) => {
+    const form = new FormData();
+    form.append("file", file, file.name);
+    return call<{ events: number; today: CalendarEvent[]; profile: Profile }>("/api/profile/calendar", { method: "POST", body: form });
+  },
+  removeCalendar: () => call<Profile>("/api/profile/calendar", { method: "DELETE" }),
+  geocode: (q: string) => call<Place[]>(`/api/geocode?q=${encodeURIComponent(q)}`),
+  addPreference: (text: string, applies_when?: string) =>
+    call<{ new: boolean }>("/api/preferences", json("POST", { text, applies_when: applies_when ?? null })),
   preferences: () => call<Preference[]>("/api/preferences"),
   forget: (id: number) => call<void>(`/api/preferences/${id}`, { method: "DELETE" }),
   scan: (photos: File[]) => {

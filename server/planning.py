@@ -45,16 +45,42 @@ class Planning:
         if hit:
             return hit
         if not self.settings.live:
-            recorded = [self.cache.get("weather", k) for k in self.cache.keys("weather")]
-            same_day = [w for w in recorded if w and w.get("date") == day.isoformat()]
-            return (same_day or recorded or [{**CANNED_WEATHER, "date": day.isoformat()}])[-1]
+            recorded = [w for w in (self.cache.get("weather", k) for k in self.cache.keys("weather")) if w]
+            near = [w for w in recorded if w.get("location") and abs(w["location"]["lat"] - lat) < 0.2
+                    and abs(w["location"]["lon"] - lon) < 0.2]
+            same_day = [w for w in near or recorded if w.get("date") == day.isoformat()]
+            return (same_day or near or recorded or [{**CANNED_WEATHER, "date": day.isoformat()}])[-1]
         w = tools.get_weather(day, lat, lon)
         self.cache.put("weather", key, w)
         return w
 
-    @staticmethod
-    def calendar(day: date) -> dict:
-        return tools.get_calendar(day)
+    # -- the user's setup (from getting started): where they are and which calendar to read
+
+    @property
+    def calendar_path(self):
+        return self.settings.var_dir / "private" / "calendar.ics"
+
+    def profile(self) -> dict:
+        # Before getting started, keep the old behaviour: .env location and the sample calendar.
+        return {"location": None, "calendar": "sample", "calendar_name": None, "onboarded": False,
+                **(self.store.get_setting("profile") or {})}
+
+    def update_profile(self, **changes) -> dict:
+        p = {**self.profile(), **{k: v for k, v in changes.items() if v is not None}}
+        self.store.put_setting("profile", p)
+        return p
+
+    def location(self) -> tuple[float, float]:
+        loc = self.profile()["location"]
+        return (loc["lat"], loc["lon"]) if loc else (tools.DEFAULT_LAT, tools.DEFAULT_LON)
+
+    def calendar(self, day: date) -> dict:
+        kind = self.profile()["calendar"]
+        if kind == "ics" and self.calendar_path.exists():
+            return tools.get_calendar(day, self.calendar_path)
+        if kind == "sample":
+            return tools.get_calendar(day)
+        return {"date": day.isoformat(), "events": [], "note": "no calendar connected"}
 
     def _garments(self) -> list[dict]:
         return [i for i in self.store.list_items() if i["tags"]]
@@ -63,8 +89,9 @@ class Planning:
 
     async def make_plan(self, day: date, notes: str = "", lat: float | None = None, lon: float | None = None,
                         fresh: bool = False) -> dict:
-        lat = tools.DEFAULT_LAT if lat is None else lat
-        lon = tools.DEFAULT_LON if lon is None else lon
+        home = self.location()
+        lat = home[0] if lat is None else lat
+        lon = home[1] if lon is None else lon
         items = self._garments()
         if not items:
             raise ValueError("The wardrobe is empty: scan some clothes first.")
@@ -168,7 +195,7 @@ class Planning:
         worn_ids = self.store.worn_on(day.isoformat())
         worn = [i for i in (self.store.get_item(x) for x in worn_ids) if i and i["tags"]]
         plan = self.store.get_plan(plan_id=plan_id) if plan_id else self.store.get_plan(day=day.isoformat())
-        weather = plan["weather"] if plan else self.weather(day, tools.DEFAULT_LAT, tools.DEFAULT_LON)
+        weather = plan["weather"] if plan else self.weather(day, *self.location())
         prefs = self.store.list_preferences()
 
         key = sha256(json.dumps([PLAN_VERSION, "checkin", day.isoformat(), answers, worn_ids,
@@ -214,7 +241,7 @@ class Planning:
         thrift = self.store.list_thrift()
         watching = [t["name"] for t in thrift if t["status"] == "watching"]
         dismissed = [t["name"] for t in thrift if t["status"] == "dismissed"]
-        weather = self.weather(day, tools.DEFAULT_LAT, tools.DEFAULT_LON)
+        weather = self.weather(day, *self.location())
         parts = (weather.get("parts") or {}).values()
         note = (f"{min(t for p in parts for t in p['temp_c'])}-{max(t for p in parts for t in p['temp_c'])}°C, "
                 f"feels like {min(p['feels_like_low_c'] for p in parts)}° at the coldest") if parts else "unknown"
