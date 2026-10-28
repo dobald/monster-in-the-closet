@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from "react";
-import { api, type BodyProfile, type PhotoCheck, type Plan, type TryOnJob, type TryOnMode, type TryOnProfile } from "../api";
+import { api, itemName, shortName, type BodyProfile, type LayersStatus, type PhotoCheck, type Plan, type TryOnJob, type TryOnMode, type TryOnProfile } from "../api";
 import type { AppCtx } from "../App";
 import Oni from "../Oni";
 
 // Try-on (wireframe 2d): who wears it (mannequin by default, your photo only by opt-in, or no body
-// at all), then the render with the always-faithful flat-lay one tap away.
+// at all). The mannequin is dressed from per-garment layers stacked on one base image, so swapping
+// looks or taking a piece off is instant; the exact full render and the flat-lay are a tap away.
 
 const TONES: [string, string][] = [
   ["#F6DCC9", "Pale ivory"], ["#EBC3A4", "Light beige"], ["#D9A57E", "Sand"], ["#C08A5E", "Warm tan"],
@@ -24,7 +25,7 @@ export default function TryOn({ plan, lookIndex, setupOnly, ctx, onClose }: {
   plan: Plan | null; lookIndex: number | null; setupOnly: boolean; ctx: AppCtx; onClose: () => void;
 }) {
   const [profile, setProfile] = useState<TryOnProfile | null>(null);
-  const [view, setView] = useState<"loading" | "setup" | "result">("loading");
+  const [view, setView] = useState<"loading" | "setup" | "result" | "dress">("loading");
   const [job, setJob] = useState<TryOnJob | null>(null);
   const canRender = plan !== null && lookIndex !== null;
 
@@ -44,6 +45,7 @@ export default function TryOn({ plan, lookIndex, setupOnly, ctx, onClose }: {
     api.tryonProfile().then((p) => {
       setProfile(p);
       if (setupOnly || !p.ready || !canRender) setView("setup");
+      else if (p.mode === "mannequin") setView("dress");
       else start();
     }).catch((e) => ctx.toast((e as Error).message));
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -69,7 +71,7 @@ export default function TryOn({ plan, lookIndex, setupOnly, ctx, onClose }: {
           </button>
           <span className="label" style={{ fontWeight: 400 }}>
             TRY-ON · <span lang="ja">試着</span>
-            {look ? ` · ${look.name.toUpperCase()}` : ""}
+            {look && view !== "dress" ? ` · ${look.name.toUpperCase()}` : ""}
           </span>
         </div>
 
@@ -81,7 +83,10 @@ export default function TryOn({ plan, lookIndex, setupOnly, ctx, onClose }: {
             cta={canRender && !setupOnly ? "Save & try it on →" : "Save"}
             onSaved={(p) => {
               setProfile(p);
-              if (canRender && !setupOnly) start();
+              if (canRender && !setupOnly) {
+                if (p.mode === "mannequin") setView("dress");
+                else start();
+              }
               else {
                 ctx.toast("Try-on settings saved.");
                 onClose();
@@ -90,6 +95,7 @@ export default function TryOn({ plan, lookIndex, setupOnly, ctx, onClose }: {
           />
         )}
         {view === "result" && <Result job={job} mode={profile?.mode ?? "mannequin"} onSetup={() => setView("setup")} onClose={onClose} />}
+        {view === "dress" && canRender && <DressUp plan={plan!} initialLook={lookIndex!} ctx={ctx} onSetup={() => setView("setup")} onClose={onClose} />}
       </div>
     </div>
   );
@@ -323,7 +329,7 @@ function Figure({ body }: { body: BodyProfile }) {
 
 // ------------------------------------------------------------------ result
 
-function Result({ job, mode, onSetup, onClose }: { job: TryOnJob | null; mode: TryOnMode; onSetup: () => void; onClose: () => void }) {
+function Result({ job, mode, onSetup, onClose, bare = false }: { job: TryOnJob | null; mode: TryOnMode; onSetup: () => void; onClose: () => void; bare?: boolean }) {
   const [showFlat, setShowFlat] = useState(false);
   const [elapsed, setElapsed] = useState(0);
   const running = !job || job.status === "running";
@@ -393,9 +399,185 @@ function Result({ job, mode, onSetup, onClose }: { job: TryOnJob | null; mode: T
         </div>
       )}
 
+      {!bare && (
+        <>
+          <div style={{ flex: 1 }} />
+          <div style={{ display: "flex", gap: 10, paddingRight: 3 }}>
+            <button type="button" className="btn press" style={{ flex: 1 }} onClick={onSetup} disabled={running}>
+              Who wears it?
+            </button>
+            <button type="button" className="btn primary press" style={{ flex: 1.3 }} onClick={onClose}>
+              Done
+            </button>
+          </div>
+        </>
+      )}
+    </>
+  );
+}
+
+// ------------------------------------------------------------------ dress-up (layered)
+
+const LOOK_LETTERS = ["A", "B", "C"];
+
+function DressUp({ plan, initialLook, ctx, onSetup, onClose }: {
+  plan: Plan; initialLook: number; ctx: AppCtx; onSetup: () => void; onClose: () => void;
+}) {
+  const [lookIndex, setLookIndex] = useState(initialLook);
+  const [tab, setTab] = useState<"layered" | "exact" | "flat">("layered");
+  const [status, setStatus] = useState<LayersStatus | null>(null);
+  const [off, setOff] = useState<Set<string>>(new Set());
+  const [job, setJob] = useState<TryOnJob | null>(null);
+  const [flat, setFlat] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const look = plan.looks[lookIndex];
+  // Prepare every look's pieces at once, so switching looks is instant once they're made.
+  const allIds = [...new Set(plan.looks.flatMap((l) => l.item_ids))];
+  const pending = !!status && (status.base.state === "pending" || status.layers.some((l) => l.state === "pending"));
+
+  useEffect(() => {
+    api.tryonLayers(allIds, true).then(setStatus).catch((e) => setError((e as Error).message));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [plan.id]);
+
+  useEffect(() => {
+    if (!pending) return;
+    const t = setTimeout(() => api.tryonLayers(allIds, false).then(setStatus).catch(() => {}), 2500);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status]);
+
+  useEffect(() => {
+    setOff(new Set());
+    setJob(null);
+    setFlat(null);
+  }, [lookIndex]);
+
+  useEffect(() => {
+    if (tab === "flat" && !flat) api.flatlay(plan.id, lookIndex).then((r) => setFlat(r.url)).catch(() => {});
+    if (tab === "exact" && !job) api.startTryon(plan.id, lookIndex).then(setJob).catch((e) => ctx.toast((e as Error).message));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, lookIndex]);
+
+  useEffect(() => {
+    if (!job || job.status !== "running") return;
+    const t = setTimeout(() => api.tryonJob(job.id).then(setJob).catch(() => {}), 2000);
+    return () => clearTimeout(t);
+  }, [job]);
+
+  const byId = new Map(status?.layers.map((l) => [l.item_id, l]) ?? []);
+  const pieces = look.items.map((it) => ({ item: it, layer: byId.get(it.id) }));
+  const shown = pieces.filter((p) => p.layer?.state === "ready" && !off.has(p.item.id)).sort((a, b) => a.layer!.order - b.layer!.order);
+  const making = pieces.filter((p) => p.layer?.state === "pending");
+  const [W, H] = status?.base.size ?? [1120, 2240];
+  const baseMsg = error ?? (status?.base.state === "failed" ? "Couldn't set up the mannequin." : status?.base.state === "missing" ? "No mannequin made yet." : null);
+
+  return (
+    <>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+        <button type="button" className="icon-btn press" aria-label="Previous look" onClick={() => setLookIndex((lookIndex + plan.looks.length - 1) % plan.looks.length)}>
+          ◀
+        </button>
+        <div style={{ textAlign: "center", minWidth: 0 }}>
+          <span className="label" style={{ fontWeight: 400 }}>LOOK {LOOK_LETTERS[lookIndex]} · {lookIndex + 1} / {plan.looks.length}</span>
+          <h2 className="display" style={{ fontSize: 20, lineHeight: 1.1 }}>{look.name}</h2>
+        </div>
+        <button type="button" className="icon-btn press" aria-label="Next look" onClick={() => setLookIndex((lookIndex + 1) % plan.looks.length)}>
+          ▶
+        </button>
+      </div>
+
+      <div role="group" aria-label="View" style={{ display: "flex", gap: 6 }}>
+        {([["layered", "Dress-up · instant"], ["exact", "Exact render"], ["flat", "Flat-lay"]] as const).map(([id, label]) => (
+          <button key={id} type="button" className="chip press" aria-pressed={tab === id} style={{ height: 32, fontSize: 12, padding: "0 10px" }} onClick={() => setTab(id)}>
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {tab === "layered" && (
+        <>
+          <div
+            className="halftone"
+            style={{ position: "relative", aspectRatio: `${W} / ${H}`, maxHeight: "58dvh", margin: "0 auto", width: "100%", border: "var(--line)", borderRadius: 12, overflow: "hidden" }}
+          >
+            {status?.base.state === "ready" ? (
+              <>
+                <img src={status.base.url} alt="Your mannequin" style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }} />
+                {shown.map(({ item, layer }) => {
+                  const [x, y, w, h] = layer!.box!;
+                  return (
+                    <img
+                      key={item.id}
+                      src={layer!.url}
+                      alt={itemName(item)}
+                      style={{
+                        position: "absolute", left: `${(x / W) * 100}%`, top: `${(y / H) * 100}%`, width: `${(w / W) * 100}%`, height: `${(h / H) * 100}%`,
+                        zIndex: layer!.order, animation: "fade .25s ease-out both",
+                      }}
+                    />
+                  );
+                })}
+              </>
+            ) : (
+              <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 10, padding: 16, textAlign: "center" }}>
+                <Oni mood={baseMsg ? "restless" : "calm"} size={72} />
+                <span style={{ background: "var(--washi)", border: "var(--line)", borderRadius: 6, padding: "6px 12px", fontWeight: 700, fontSize: 13 }}>
+                  {baseMsg ?? <span className="spinner-dots">Setting up your mannequin (just once)</span>}
+                </span>
+              </div>
+            )}
+            {making.length > 0 && status?.base.state === "ready" && (
+              <span className="label" style={{ position: "absolute", zIndex: 9, left: 8, bottom: 8, right: 8, background: "var(--washi)", border: "var(--line)", borderRadius: 6, padding: "4px 8px", textAlign: "center" }}>
+                <span className="spinner-dots">PUTTING ON {making.map((p) => shortName(p.item).toUpperCase()).join(" + ")}</span>
+              </span>
+            )}
+          </div>
+
+          <div role="group" aria-label="Pieces" style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            {pieces.map(({ item, layer }) => {
+              const on = !off.has(item.id);
+              const usable = layer?.state === "ready";
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  className="chip press"
+                  aria-pressed={on && usable}
+                  disabled={!usable}
+                  title={layer?.state === "failed" ? layer.error : layer?.state === "unsupported" ? "Not shown on the mannequin" : undefined}
+                  onClick={() => {
+                    const next = new Set(off);
+                    if (on) next.add(item.id);
+                    else next.delete(item.id);
+                    setOff(next);
+                  }}
+                  style={{ height: 32, fontSize: 12, padding: "0 10px" }}
+                >
+                  {usable ? (on ? "✓ " : "+ ") : ""}{shortName(item)}
+                  {layer?.state === "pending" ? " …" : layer?.state === "failed" ? " ✕" : ""}
+                </button>
+              );
+            })}
+          </div>
+          <span className="small muted">
+            {status?.note ?? "Each piece is dressed once, then reused for every outfit. Tap a piece to take it off. Exact render redraws the whole look (about a minute) for tucks and drape."}
+          </span>
+        </>
+      )}
+
+      {tab === "exact" && <Result job={job} mode="mannequin" onSetup={onSetup} onClose={onClose} bare />}
+
+      {tab === "flat" && (
+        <div className="halftone" style={{ aspectRatio: "1", border: "var(--line)", borderRadius: 12, overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center" }}>
+          {flat ? <img src={flat} alt={`Flat-lay of ${look.name}`} style={{ width: "100%", height: "100%", objectFit: "contain", background: "var(--washi)" }} /> : <span className="small">Loading…</span>}
+        </div>
+      )}
+
       <div style={{ flex: 1 }} />
       <div style={{ display: "flex", gap: 10, paddingRight: 3 }}>
-        <button type="button" className="btn press" style={{ flex: 1 }} onClick={onSetup} disabled={running}>
+        <button type="button" className="btn press" style={{ flex: 1 }} onClick={onSetup}>
           Who wears it?
         </button>
         <button type="button" className="btn primary press" style={{ flex: 1.3 }} onClick={onClose}>

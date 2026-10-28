@@ -194,12 +194,25 @@ In the app, the Thrift tab shows gap cards with a "+N NEW OUTFITS" sticker, the 
 
 That run also exposed a judge bug: it scored the render 2/5 because the mannequin's sculpted nose and lips counted as a "human face". The face rule now only triggers on a realistic face (eyes, skin, hair). Wearer notes are also shown whenever they cost points, so a low score always comes with a reason.
 
+**Layered dress-up (the default for the mannequin).** Rendering every outfit cost about 70s and up to four model calls. Now each garment is dressed once and reused for every outfit:
+1. **Base, once per body profile.** Muse Image renders a plain white mannequin, then an edit recolours it to your finish, form and build. Asking for body details on a bare mannequin trips the content filter; recolouring an existing one doesn't.
+2. **Layer, once per garment.** Muse Image puts just that item on *that exact base image*. SAM 3.1 cuts the garment out, and the result is saved as a cropped transparent layer with its position on the base.
+3. **Outfit, instantly.** The app stacks the layers itself: bottoms, then tops, then outerwear. Switching looks (◀ ▶) or tapping a piece to take it off needs no model call.
+
+`spike/layers.py` showed this works: separately rendered garments differ from the base by under 1% of pixels outside the garment, so the layers line up with no alignment step.
+
+Live on the 7-garment closet, the base plus six layers for today's three looks took about 46s with three running at once. After that, swapping looks took about 60ms.
+
+New scans are dressed in the background, and Notes has "Dress the mannequin with my whole closet". The full render stays one tap away as **Exact render**, for tucks and drape, and the flat-lay stays one tap away too. Layers belong to one mannequin, so changing your body settings re-dresses each garment once. Photo mode keeps using full renders.
+
 | Endpoint | What it does |
 |---|---|
 | `GET` / `PUT /api/tryon/profile` | Mode and mannequin details; `ready` says whether try-on can run |
 | `POST` / `DELETE /api/tryon/photo` | The face version: upload (multipart `photo` + `consent=true`), checked before it's kept; delete removes its renders |
 | `POST /api/tryon` | `{plan_id, look}`: starts or reuses a render job |
 | `GET /api/tryon/jobs/{id}` | Poll: status, progress step, score, differences, render and flat-lay URLs |
+| `POST /api/tryon/layers` | `{item_ids, prepare}`: base and per-garment layer states (with boxes), starting missing ones in live mode |
+| `GET /api/tryon/flatlay` | `?plan_id&look`: the exact flat-lay, without starting a render |
 
 ## Testing on your phone
 

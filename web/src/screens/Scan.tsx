@@ -40,6 +40,12 @@ export default function Scan({ ctx }: { ctx: AppCtx }) {
       setResult(r);
       setShots([]);
       ctx.bumpWardrobe();
+      // Pre-dress the mannequin with the new pieces in the background, so try-on is instant later.
+      api.tryonProfile()
+        .then((p) => {
+          if (p.mode === "mannequin" && p.ready) api.tryonLayers(r.items.map((i) => i.id), true).catch(() => {});
+        })
+        .catch(() => {});
     } catch (e) {
       setError((e as Error).message);
     } finally {

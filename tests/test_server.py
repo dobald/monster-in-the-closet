@@ -238,6 +238,32 @@ def test_plan_wear_checkin(var_dir: Path, run_dir: Path) -> None:
         assert p["mode"] == "mannequin" and p["photo"] is None, p
         assert c.get(f"/api/renders/{key}.png").status_code == 200, "mannequin renders are kept"
 
+        # Layered try-on: fixture mode reports what exists and never generates.
+        layers = main.app.state.layers
+        ids = plan["looks"][0]["item_ids"]
+        st = c.post("/api/tryon/layers", json={"item_ids": ids}).json()
+        assert st["base"]["state"] == "missing" and not st["live"] and st["note"], st
+        assert {l["state"] for l in st["layers"]} == {"missing"} and not layers._tasks, "fixture mode must not start renders"
+        assert c.get("/api/tryon/flatlay", params={"plan_id": plan["id"], "look": 0}).json()["url"].startswith("/api/renders/flat-")
+        # Simulate what live mode records: a base and a layer for the top.
+        bk = st["base_key"]
+        (layers.root / bk).mkdir(parents=True, exist_ok=True)
+        Image.new("RGB", (100, 200), "tan").save(layers.root / bk / "base.png")
+        layers._put_meta(bk, "base", {"status": "ready", "size": [100, 200]})
+        top_id = next(l["item_id"] for l in st["layers"] if l["category"] == "top")
+        Image.new("RGBA", (40, 50), (90, 90, 90, 255)).save(layers.root / bk / f"{top_id}.png")
+        layers._put_meta(bk, top_id, {"status": "ready", "box": [30, 40, 40, 50], "size": [100, 200]})
+        st = c.post("/api/tryon/layers", json={"item_ids": ids, "prepare": False}).json()
+        top = next(l for l in st["layers"] if l["item_id"] == top_id)
+        assert st["base"]["state"] == "ready" and top["state"] == "ready" and top["box"] == [30, 40, 40, 50] and top["order"] == 2, st
+        assert c.get(top["url"]).status_code == 200 and c.get(st["base"]["url"]).status_code == 200
+        assert c.get(f"/api/layers/{bk}/..%2Fbase.png").status_code == 404
+        # Changing the body makes a new base key: layers belong to one mannequin.
+        c.put("/api/tryon/profile", json={"mode": "mannequin", "body": {**body, "skin_tone": 6}})
+        assert c.post("/api/tryon/layers", json={"item_ids": ids}).json()["base_key"] != bk
+        assert c.put("/api/tryon/profile", json={"mode": "flat"}).status_code == 200
+        assert c.post("/api/tryon/layers", json={"item_ids": ids}).status_code == 409, "layers are mannequin-only"
+
 
 def _items_for_planner() -> list[dict]:
     from closet.schema import Garment
@@ -287,6 +313,19 @@ def test_gap_math() -> None:
     assert out[0]["outfits_unlocked"] == 4 and out[1]["outfits_unlocked"] == 2
     assert out[1]["price_range"] == "", "a price without a range is dropped, not shown"
     assert out[0]["search_terms"] == ["wool coat"]
+
+
+def test_cut_layer() -> None:
+    """A layer is cropped to its garment, and its box says where it sits on the base."""
+    import numpy as np
+    from server.layers import cut_layer
+    dressed = Image.new("RGB", (200, 400), "white")
+    mask = np.zeros((400, 200), dtype=bool)
+    mask[100:250, 50:150] = True
+    layer, (x, y, w, h) = cut_layer(dressed, mask)
+    assert layer.mode == "RGBA" and layer.size == (w, h)
+    assert 45 <= x <= 50 and 95 <= y <= 100 and 100 <= w <= 110 and 150 <= h <= 160, (x, y, w, h)
+    assert layer.getpixel((w // 2, h // 2))[3] == 255 and layer.getpixel((0, 0))[3] < 40, "soft edge, solid middle"
 
 
 def test_agent_loop_and_repair() -> None:
@@ -411,9 +450,10 @@ def main_() -> None:
         test_plan_wear_checkin(tmp / "plan", run_dir)
         test_validate_plan()
         test_gap_math()
+        test_cut_layer()
         test_agent_loop_and_repair()
         test_duplicates(tmp / "dupes")
-        print("OK: fixture mode, seeding, tag fixes, caching, dedupe, planning, wear, check-ins, the agent loop, gap finder, try-on "
+        print("OK: fixture mode, seeding, tag fixes, caching, dedupe, planning, wear, check-ins, the agent loop, gap finder, try-on, layered try-on "
               "and cross-photo duplicates all behave.")
     finally:
         shutil.rmtree(run_dir, ignore_errors=True)

@@ -27,6 +27,7 @@ from .pipeline import FixtureMissing, Pipeline
 from .planning import Planning, today_local
 from .store import Store
 from .examples import Examples
+from .layers import Layers
 from .tryon import TryOn
 
 MAX_PHOTOS = 10
@@ -124,6 +125,7 @@ async def lifespan(app: FastAPI):
     app.state.planning = Planning(s, cache, store)
     app.state.tryon = TryOn(s, cache, store)
     app.state.examples = Examples(s)
+    app.state.layers = Layers(s, store)
     yield
 
 
@@ -465,6 +467,41 @@ async def start_tryon(body: TryOnIn) -> dict:  # async: the render job is schedu
         raise HTTPException(422, str(e))
     except ValueError as e:
         raise HTTPException(409, str(e))
+
+
+class LayersIn(BaseModel):
+    item_ids: list[str]
+    prepare: bool = True  # start making missing layers (live mode only)
+
+
+@app.post("/api/tryon/layers")
+async def tryon_layers(body: LayersIn) -> dict:
+    """Layered try-on for the mannequin: the base image and one layer per garment, with their states.
+    The app stacks ready layers itself, so swapping outfits needs no new render. Poll until ready."""
+    p = app.state.tryon.profile()
+    if p["mode"] != "mannequin" or not p["body"]:
+        raise HTTPException(409, "Layered try-on needs the mannequin set up.")
+    return app.state.layers.status(p["body"], body.item_ids[:60], prepare=body.prepare)
+
+
+@app.get("/api/layers/{base_key}/{name}.png")
+def layer_file(base_key: str, name: str) -> FileResponse:
+    path = app.state.layers.root / base_key / f"{name}.png"
+    if not (base_key.isalnum() and name.isalnum()) or not path.exists():
+        raise HTTPException(404, "No such layer.")
+    return FileResponse(path, media_type="image/png", headers={"Cache-Control": "private, max-age=31536000, immutable"})
+
+
+@app.get("/api/tryon/flatlay")
+def tryon_flatlay(plan_id: str, look: int = 0) -> dict:
+    """The always-exact flat-lay of a look, without starting a render."""
+    try:
+        _, items = app.state.tryon._look(plan_id, look)
+    except KeyError as e:
+        raise HTTPException(404, str(e).strip("'\""))
+    except IndexError as e:
+        raise HTTPException(422, str(e))
+    return {"url": app.state.tryon.flatlay_url([i["id"] for i in items])}
 
 
 @app.get("/api/tryon/jobs/{job_id}")

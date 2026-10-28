@@ -212,6 +212,27 @@ export interface TryOnJob {
   note: string | null;
 }
 
+export type LayerStateName = "ready" | "pending" | "failed" | "missing" | "unsupported";
+
+export interface LayerState {
+  item_id: string;
+  category: string;
+  order: number; // stacking order: bottoms 1, tops 2, outerwear 3
+  state: LayerStateName;
+  url?: string;
+  box?: [number, number, number, number]; // x, y, w, h on the base image
+  size?: [number, number];
+  error?: string;
+}
+
+export interface LayersStatus {
+  base_key: string;
+  base: { state: LayerStateName; url?: string; size?: [number, number]; error?: string };
+  layers: LayerState[];
+  live: boolean;
+  note: string | null;
+}
+
 export interface Health {
   ok: boolean;
   mode: "fixture" | "live";
@@ -271,6 +292,10 @@ export const api = {
   deletePersonPhoto: () => call<{ renders_deleted: number }>("/api/tryon/photo", { method: "DELETE" }),
   startTryon: (planId: string, look: number) => call<TryOnJob>("/api/tryon", json("POST", { plan_id: planId, look })),
   tryonJob: (id: string) => call<TryOnJob>(`/api/tryon/jobs/${id}`),
+  tryonLayers: (itemIds: string[], prepare = true) =>
+    call<LayersStatus>("/api/tryon/layers", json("POST", { item_ids: itemIds, prepare })),
+  flatlay: (planId: string, look: number) =>
+    call<{ url: string }>(`/api/tryon/flatlay?plan_id=${encodeURIComponent(planId)}&look=${look}`),
   gaps: (fresh = false) => call<Gaps>("/api/gaps", json("POST", { fresh })),
   thrift: () => call<ThriftEntry[]>("/api/thrift"),
   thriftExample: (p: GapPiece) =>

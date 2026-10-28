@@ -85,6 +85,25 @@ export default function Notes({ ctx }: { ctx: AppCtx }) {
         </span>
         <span aria-hidden="true" style={{ fontWeight: 700 }}>Edit →</span>
       </button>
+      {tryon?.mode === "mannequin" && tryon.ready && (
+        <button
+          type="button"
+          className="chip press"
+          style={{ alignSelf: "flex-start", height: 32, fontSize: 12 }}
+          onClick={async () => {
+            try {
+              const items = await api.wardrobe();
+              const s = await api.tryonLayers(items.map((i) => i.id), true);
+              const todo = s.layers.filter((l) => l.state === "pending").length;
+              ctx.toast(!s.live ? "Dressing happens in live mode." : todo ? `Dressing ${todo} piece${todo === 1 ? "" : "s"} in the background (about 20s each).` : "Every piece is already dressed.");
+            } catch (e) {
+              ctx.toast((e as Error).message);
+            }
+          }}
+        >
+          Dress the mannequin with my whole closet
+        </button>
+      )}
 
       <section aria-label="Appearance" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
         <span className="label">APPEARANCE · <span lang="ja">表示</span></span>
