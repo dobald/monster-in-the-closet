@@ -347,7 +347,7 @@ function Result({ job, mode, onSetup, onClose, bare = false }: { job: TryOnJob |
 
   return (
     <>
-      <div className="halftone" style={{ position: "relative", aspectRatio: "3 / 4", border: "var(--line)", borderRadius: 12, overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <div className="halftone" style={{ position: "relative", flex: "none", aspectRatio: "3 / 4", border: "var(--line)", borderRadius: 12, overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center" }}>
         {running ? (
           <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 12, padding: 16, textAlign: "center" }}>
             <Oni mood="calm" size={84} />
@@ -500,7 +500,10 @@ function DressUp({ plan, initialLook, ctx, onSetup, onClose }: {
         <>
           <div
             className="halftone"
-            style={{ position: "relative", aspectRatio: `${W} / ${H}`, maxHeight: "58dvh", margin: "0 auto", width: "100%", border: "var(--line)", borderRadius: 12, overflow: "hidden" }}
+            // Cap the width (not the height) so the frame always keeps the base image's shape: a height
+            // cap with width 100% overrode aspect-ratio and squashed the mannequin and its layers. flex: none
+            // stops the full-height sheet (a flex column) from shrinking the frame to fit the screen.
+            style={{ position: "relative", flex: "none", aspectRatio: `${W} / ${H}`, width: `min(100%, calc(58dvh * ${W} / ${H}))`, margin: "0 auto", border: "var(--line)", borderRadius: 12, overflow: "hidden" }}
           >
             {status?.base.state === "ready" ? (
               <>
@@ -570,7 +573,7 @@ function DressUp({ plan, initialLook, ctx, onSetup, onClose }: {
       {tab === "exact" && <Result job={job} mode="mannequin" onSetup={onSetup} onClose={onClose} bare />}
 
       {tab === "flat" && (
-        <div className="halftone" style={{ aspectRatio: "1", border: "var(--line)", borderRadius: 12, overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <div className="halftone" style={{ flex: "none", aspectRatio: "1", border: "var(--line)", borderRadius: 12, overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center" }}>
           {flat ? <img src={flat} alt={`Flat-lay of ${look.name}`} style={{ width: "100%", height: "100%", objectFit: "contain", background: "var(--washi)" }} /> : <span className="small">Loading…</span>}
         </div>
       )}
