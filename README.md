@@ -148,6 +148,32 @@ Settings in `.env`:
 - `MONSTER_LAT` and `MONSTER_LON`: default location, Toronto
 - `MONSTER_CALENDAR`: JSON or ICS path; defaults to `fixtures/calendar_sample.json`
 
+## Thrift (古着): gap finder and thrift list
+
+The only shopping the oni does is second-hand, and only for pieces that earn their place. Muse Spark Open reads the wardrobe, your learned preferences, the season and recent weather. It names the 3 pieces that would unlock the most new outfits with what you already own. For each piece it gives:
+- the items it goes with
+- what to check on a thrift rack: the fabric content on the label, quality details and condition
+- a rough second-hand price
+- search terms, linked to eBay, Depop and Poshmark searches
+
+Rules for what it suggests:
+- Never a fast-fashion brand.
+- No shoes or accessories: scans cover clothes, so missing shoes probably just weren't photographed.
+- Nothing you've dismissed or are already watching.
+
+**The "+N new outfits" figure is counted in code, not taken from the model.** It comes from the pairings the model lists. For example, outerwear counts every paired top × bottom it can layer over. Pieces are ranked by that count. Spark Open ignores field descriptions in the JSON schema, so the format rules are in the prompt, and a cleanup step drops invented ids, category prefixes in names, and prices that aren't ranges.
+
+Live, on the 7-garment test closet (12s, ~1k tokens in / 3.6k out): an olive wool overshirt (+12 outfits, $35–65), tan canvas chinos (+4) and a cream cable sweater (+3). That fits: the closet has no outerwear and mornings feel like −2°.
+
+| Endpoint | What it does |
+|---|---|
+| `POST /api/gaps` | The 3 pieces with their paired items expanded; `{"fresh": true}` asks again |
+| `GET /api/thrift` | The thrift list: pieces being hunted, and ones found |
+| `POST /api/thrift` | `{piece, status}`: watch a piece, or dismiss it so it's never suggested again |
+| `PATCH` / `DELETE /api/thrift/{id}` | Mark found, or remove |
+
+In the app, the Thrift tab shows gap cards with a "+N NEW OUTFITS" sticker, the pieces you own that it goes with, and the "what to look for" tips. Your list appears as WANTED 求む posters. "Found it!" stamps a poster 済 and sends you to Scan to add the piece to your closet.
+
 ## Front end (mobile web)
 
 React + Vite in `web/`, styled after the Tokyo-street wireframes (washi, sumi, shu for the oni, ai for your day). Run the API and the dev server side by side; Vite proxies `/api` to port 8000:
@@ -163,6 +189,7 @@ Screens:
 - **Evening check-in:** temperature, feeling, tags and a note; shows the oni's reply and what it learned.
 - **Closet:** a searchable, filterable pinboard grid, with an item sheet showing tags and a remove action.
 - **Scan:** pick 1–10 flat-lay photos and build the closet.
+- **Thrift:** the gap finder and the thrift list (see above).
 - **Notes:** the oni's mood, closet-alive meter and every learned preference. Each preference can be forgotten.
 
 In fixture mode the Today screen shows a DEMO DATA tag, and plans come from the rule picker.

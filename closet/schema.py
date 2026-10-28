@@ -140,6 +140,29 @@ class CheckinLearning(BaseModel):
     applies_when: str | None = Field(description="Short condition, e.g. 'evenings below 8°C', or null if always.")
 
 
+GapCategory = Literal["top", "bottom", "dress", "outerwear"]
+
+
+class GapPiece(BaseModel):
+    """One piece the wardrobe is missing, to look for second-hand."""
+
+    name: str = Field(description="What to look for, 2-4 words, e.g. 'Camel wool overcoat'.")
+    category: GapCategory
+    colors: list[str] = Field(description="1-2 plain colour names that work with the closet, e.g. ['camel'].")
+    pairs_with: list[str] = Field(description="Wardrobe ids it goes with, exactly as given. At least 2.")
+    why: str = Field(description="Max 2 short sentences in the oni's voice: what gap it closes.")
+    look_for: str = Field(description="Second-hand tips: fabric, fit, details and labels to check, in one or two sentences.")
+    price_range: str = Field(description="Rough second-hand price, e.g. '$25-60'.")
+    search_terms: list[str] = Field(description="2-3 short search phrases for resale apps, e.g. 'wool overcoat camel'.")
+
+
+class GapReport(BaseModel):
+    """The closet's biggest gaps, most outfits unlocked first."""
+
+    summary: str = Field(description="One short sentence on the closet's shape, e.g. 'Lots of tees, nothing to wear over them.'")
+    pieces: list[GapPiece] = Field(description="3 pieces, most useful first.")
+
+
 class SameGarment(BaseModel):
     """Are two cutouts from different closet photos the same physical garment?
     Observations come before the verdict, like the render judge."""

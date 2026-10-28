@@ -160,6 +160,24 @@ def test_plan_wear_checkin(var_dir: Path, run_dir: Path) -> None:
         assert oni["closet_alive_pct"] == 100 and oni["garments"] == 2, oni
         assert c.delete(f"/api/preferences/{prefs[0]['id']}").status_code == 204
 
+        # Gap finder (rules in fixture mode) and the thrift list.
+        gaps = c.post("/api/gaps").json()
+        assert gaps["source"] == "rules" and gaps["pieces"], gaps
+        coat = gaps["pieces"][0]
+        assert coat["category"] == "outerwear" and coat["outfits_unlocked"] == 1 and len(coat["pairs"]) == 2, coat
+        tid = c.post("/api/thrift", json={"piece": coat}).json()["id"]
+        assert c.post("/api/thrift", json={"piece": coat}).json()["id"] == tid, "re-adding updates, no duplicate"
+        listed = c.get("/api/thrift").json()
+        assert [t["name"] for t in listed] == [coat["name"]] and listed[0]["piece"]["pairs"], listed
+        assert c.patch(f"/api/thrift/{tid}", json={"status": "found"}).status_code == 204
+        assert c.get("/api/thrift").json()[0]["status"] == "found"
+        assert c.patch(f"/api/thrift/{tid}", json={"status": "lost"}).status_code == 422
+        c.post("/api/thrift", json={"piece": coat, "status": "dismissed"})
+        assert c.get("/api/thrift").json() == [], "dismissed pieces are hidden from the list"
+        again = c.post("/api/gaps").json()["pieces"]
+        assert coat["name"] not in [p["name"] for p in again], "a dismissed piece is not suggested again"
+        assert c.delete(f"/api/thrift/{tid}").status_code == 204
+
 
 def _items_for_planner() -> list[dict]:
     from closet.schema import Garment
@@ -183,6 +201,32 @@ def test_validate_plan() -> None:
     assert planner.variety_problems(samey, items) == []  # only one top and one bottom owned: repeating is fine
     second_top = {**items[0], "id": "ccc"}
     assert "same top" in planner.variety_problems(samey, items + [second_top])[0]
+
+
+def test_gap_math() -> None:
+    """The +N outfits number is counted, not trusted; model output is cleaned before it reaches the app."""
+    from closet import gaps
+    from closet.schema import GapPiece, GapReport
+    items = _items_for_planner()  # aaa: top, bbb: bottom
+    items += [{**items[0], "id": "ccc"}, {**items[1], "id": "ddd"}]  # 2 tops, 2 bottoms
+    assert gaps.outfits_unlocked("outerwear", ["aaa", "bbb", "ccc", "ddd"], items) == 4
+    assert gaps.outfits_unlocked("top", ["bbb", "ddd", "aaa"], items) == 2
+    assert gaps.outfits_unlocked("bottom", ["aaa"], items) == 1
+
+    def piece(**kw):
+        base = dict(name="Wool coat", category="outerwear", colors=["camel"], pairs_with=["aaa", "bbb"], why="",
+                    look_for="", price_range="$30-80", search_terms=["wool coat second hand"])
+        return GapPiece(**{**base, **kw})
+    report = GapReport(summary="", pieces=[
+        piece(name="outerwear — mid-weight wool shacket in oatmeal or grey", pairs_with=["aaa", "bbb", "ccc", "ddd"]),
+        piece(name="Invented", category="top", pairs_with=["zzz", "yyy"]),  # no real ids -> dropped
+        piece(name="Oxford shirt", category="top", pairs_with=["bbb", "ddd"], price_range="2"),
+    ])
+    out = gaps.clean_report(report, items)
+    assert [p["name"] for p in out] == ["Mid-weight wool shacket", "Oxford shirt"], out
+    assert out[0]["outfits_unlocked"] == 4 and out[1]["outfits_unlocked"] == 2
+    assert out[1]["price_range"] == "", "a price without a range is dropped, not shown"
+    assert out[0]["search_terms"] == ["wool coat"]
 
 
 def test_agent_loop_and_repair() -> None:
@@ -306,9 +350,10 @@ def main_() -> None:
         test_live_mode_caches(tmp / "live")
         test_plan_wear_checkin(tmp / "plan", run_dir)
         test_validate_plan()
+        test_gap_math()
         test_agent_loop_and_repair()
         test_duplicates(tmp / "dupes")
-        print("OK: fixture mode, seeding, tag fixes, caching, dedupe, planning, wear, check-ins, the agent loop "
+        print("OK: fixture mode, seeding, tag fixes, caching, dedupe, planning, wear, check-ins, the agent loop, gap finder "
               "and cross-photo duplicates all behave.")
     finally:
         shutil.rmtree(run_dir, ignore_errors=True)

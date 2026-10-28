@@ -72,6 +72,13 @@ CREATE TABLE IF NOT EXISTS distinct_pairs (
     b TEXT NOT NULL,
     PRIMARY KEY (a, b)
 );
+CREATE TABLE IF NOT EXISTS thrift (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at  TEXT NOT NULL,
+    name        TEXT NOT NULL,
+    status      TEXT NOT NULL,           -- watching | found | dismissed
+    piece       TEXT NOT NULL            -- GapPiece JSON + outfits_unlocked
+);
 CREATE TABLE IF NOT EXISTS preferences (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     created_at   TEXT NOT NULL,
@@ -268,6 +275,31 @@ class Store:
     def delete_preference(self, pref_id: int) -> bool:
         with self._lock, self._db:
             return self._db.execute("DELETE FROM preferences WHERE id = ?", (pref_id,)).rowcount > 0
+
+    # -- thrift list
+
+    def add_thrift(self, piece: dict, status: str) -> int:
+        """Watch (or dismiss) a gap piece. Re-adding a name updates it instead of duplicating."""
+        with self._lock, self._db:
+            row = self._db.execute("SELECT id FROM thrift WHERE lower(name) = lower(?)", (piece["name"],)).fetchone()
+            if row:
+                self._db.execute("UPDATE thrift SET status = ?, piece = ? WHERE id = ?", (status, json.dumps(piece), row[0]))
+                return row[0]
+            return self._db.execute("INSERT INTO thrift (created_at, name, status, piece) VALUES (?, ?, ?, ?)",
+                                    (now(), piece["name"], status, json.dumps(piece))).lastrowid
+
+    def list_thrift(self) -> list[dict]:
+        with self._lock:
+            rows = self._db.execute("SELECT * FROM thrift ORDER BY id DESC").fetchall()
+        return [{**dict(r), "piece": json.loads(r["piece"])} for r in rows]
+
+    def set_thrift_status(self, thrift_id: int, status: str) -> bool:
+        with self._lock, self._db:
+            return self._db.execute("UPDATE thrift SET status = ? WHERE id = ?", (status, thrift_id)).rowcount > 0
+
+    def delete_thrift(self, thrift_id: int) -> bool:
+        with self._lock, self._db:
+            return self._db.execute("DELETE FROM thrift WHERE id = ?", (thrift_id,)).rowcount > 0
 
     def counts(self) -> dict:
         with self._lock:

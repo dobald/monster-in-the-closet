@@ -139,6 +139,37 @@ export interface Scan {
   duplicates: Duplicates | null;
 }
 
+export interface GapPiece {
+  name: string;
+  category: "top" | "bottom" | "dress" | "outerwear";
+  colors: string[];
+  pairs_with: string[];
+  why: string;
+  look_for: string;
+  price_range: string;
+  search_terms: string[];
+  outfits_unlocked: number;
+  pairs: Item[];
+}
+
+export interface Gaps {
+  created_at: string;
+  source: "agent" | "rules";
+  summary: string;
+  pieces: GapPiece[];
+  trace: { provider?: string; seconds?: number; cached?: boolean };
+}
+
+export type ThriftStatus = "watching" | "found" | "dismissed";
+
+export interface ThriftEntry {
+  id: number;
+  created_at: string;
+  name: string;
+  status: ThriftStatus;
+  piece: GapPiece;
+}
+
 export interface Health {
   ok: boolean;
   mode: "fixture" | "live";
@@ -186,6 +217,12 @@ export const api = {
   findDuplicates: () => call<Duplicates>("/api/wardrobe/duplicates/check", { method: "POST" }),
   mergeItems: (a: string, b: string) => call<Item>("/api/wardrobe/duplicates/merge", json("POST", { a, b })),
   notDuplicates: (a: string, b: string) => call<void>("/api/wardrobe/duplicates/distinct", json("POST", { a, b })),
+  gaps: (fresh = false) => call<Gaps>("/api/gaps", json("POST", { fresh })),
+  thrift: () => call<ThriftEntry[]>("/api/thrift"),
+  addThrift: (piece: GapPiece, status: "watching" | "dismissed" = "watching") =>
+    call<{ id: number }>("/api/thrift", json("POST", { piece, status })),
+  setThrift: (id: number, status: ThriftStatus) => call<void>(`/api/thrift/${id}`, json("PATCH", { status })),
+  removeThrift: (id: number) => call<void>(`/api/thrift/${id}`, { method: "DELETE" }),
   preferences: () => call<Preference[]>("/api/preferences"),
   forget: (id: number) => call<void>(`/api/preferences/${id}`, { method: "DELETE" }),
   scan: (photos: File[]) => {

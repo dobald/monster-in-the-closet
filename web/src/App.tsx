@@ -4,11 +4,12 @@ import Today from "./screens/Today";
 import Closet from "./screens/Closet";
 import Scan from "./screens/Scan";
 import Notes from "./screens/Notes";
+import Thrift from "./screens/Thrift";
 import Worn from "./screens/Worn";
 import Checkin from "./screens/Checkin";
 import ItemSheet from "./screens/ItemSheet";
 
-export type Tab = "today" | "closet" | "scan" | "notes";
+export type Tab = "today" | "closet" | "scan" | "thrift" | "notes";
 
 type Overlay =
   | { kind: "worn"; result: WearResult; plan: Plan; lookIndex: number }
@@ -77,6 +78,7 @@ export default function App() {
       {tab === "today" && <Today ctx={ctx} />}
       {tab === "closet" && <Closet ctx={ctx} />}
       {tab === "scan" && <Scan ctx={ctx} />}
+      {tab === "thrift" && <Thrift ctx={ctx} />}
       {tab === "notes" && <Notes ctx={ctx} />}
 
       <TabBar tab={tab} go={ctx.go} />
@@ -132,6 +134,17 @@ const TABS: { id: Tab; en: string; ja: string; icon: JSX.Element }[] = [
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
         <path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3" />
         <circle cx="12" cy="12" r="3" />
+      </svg>
+    ),
+  },
+  {
+    id: "thrift",
+    en: "THRIFT",
+    ja: "古着",
+    icon: (
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <path d="M3 12V4a1 1 0 0 1 1-1h8l9 9-9 9z" />
+        <circle cx="7.5" cy="7.5" r="1.5" />
       </svg>
     ),
   },

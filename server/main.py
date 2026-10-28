@@ -330,6 +330,62 @@ def forget_preference(pref_id: int) -> None:
         raise HTTPException(404, "No such preference.")
 
 
+class GapsIn(BaseModel):
+    fresh: bool = False
+
+
+class ThriftIn(BaseModel):
+    piece: dict[str, Any]  # a piece from POST /api/gaps
+    status: Literal["watching", "dismissed"] = "watching"
+
+
+class ThriftStatusIn(BaseModel):
+    status: Literal["watching", "found", "dismissed"]
+
+
+def _with_pairs(piece: dict) -> dict:
+    """A gap piece with the closet items it pairs with expanded (for the 'goes with' row)."""
+    store = app.state.store
+    items = [store.get_item(i) for i in piece.get("pairs_with", [])]
+    return {**piece, "pairs": [_item_out(i).model_dump() for i in items if i]}
+
+
+@app.post("/api/gaps")
+async def find_gaps(body: GapsIn | None = None) -> dict:
+    """The few pieces that would unlock the most outfits with what you own, with second-hand tips."""
+    try:
+        record = await app.state.planning.gaps(today_local(), (body or GapsIn()).fresh)
+    except ValueError as e:
+        raise HTTPException(409, str(e))
+    return {**record, "pieces": [_with_pairs(p) for p in record["pieces"]]}
+
+
+@app.get("/api/thrift")
+def thrift_list() -> list[dict]:
+    """Pieces the user is watching for or has found (dismissed ones are hidden)."""
+    return [{**t, "piece": _with_pairs(t["piece"])} for t in app.state.store.list_thrift() if t["status"] != "dismissed"]
+
+
+@app.post("/api/thrift")
+def add_thrift(body: ThriftIn) -> dict:
+    if not body.piece.get("name"):
+        raise HTTPException(422, "piece needs a name")
+    piece = {k: v for k, v in body.piece.items() if k != "pairs"}
+    return {"id": app.state.store.add_thrift(piece, body.status)}
+
+
+@app.patch("/api/thrift/{thrift_id}", status_code=204)
+def update_thrift(thrift_id: int, body: ThriftStatusIn) -> None:
+    if not app.state.store.set_thrift_status(thrift_id, body.status):
+        raise HTTPException(404, "Not on the thrift list.")
+
+
+@app.delete("/api/thrift/{thrift_id}", status_code=204)
+def remove_thrift(thrift_id: int) -> None:
+    if not app.state.store.delete_thrift(thrift_id):
+        raise HTTPException(404, "Not on the thrift list.")
+
+
 @app.get("/api/oni")
 def oni(day: date | None = None) -> dict:
     """The oni's mood and the closet-alive meter, for the Today header."""

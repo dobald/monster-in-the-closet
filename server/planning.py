@@ -13,7 +13,7 @@ import json
 import uuid
 from datetime import date, datetime, timedelta, timezone
 
-from closet import config, planner, tools
+from closet import config, gaps, planner, tools
 from closet.schema import CheckinLearning, OutfitPlan
 
 from .cache import Cache, sha256
@@ -21,6 +21,7 @@ from .settings import Settings
 from .store import Store, now
 
 PLAN_VERSION = "plan1"
+GAP_VERSION = "gaps1"
 ALIVE_WINDOW_DAYS = 30
 RESCUE_DAYS = 30
 
@@ -201,6 +202,51 @@ class Planning:
         return {"id": checkin_id, "day": day.isoformat(), "worn_item_ids": worn_ids, "oni_reply": learned.oni_reply,
                 "learned": learned.model_dump() if learned.preference else None, "new_preference": new_pref,
                 "trace": trace}
+
+
+    # -- gap finder / thrift list
+
+    async def gaps(self, day: date, fresh: bool = False) -> dict:
+        items = self._garments()
+        if not items:
+            raise ValueError("The wardrobe is empty: scan some clothes first.")
+        prefs = self.store.list_preferences()
+        thrift = self.store.list_thrift()
+        watching = [t["name"] for t in thrift if t["status"] == "watching"]
+        dismissed = [t["name"] for t in thrift if t["status"] == "dismissed"]
+        weather = self.weather(day, tools.DEFAULT_LAT, tools.DEFAULT_LON)
+        parts = (weather.get("parts") or {}).values()
+        note = (f"{min(t for p in parts for t in p['temp_c'])}-{max(t for p in parts for t in p['temp_c'])}°C, "
+                f"feels like {min(p['feels_like_low_c'] for p in parts)}° at the coldest") if parts else "unknown"
+
+        snapshot = sorted((i["id"], i["tags"]) for i in items)
+        key = sha256(json.dumps([GAP_VERSION, snapshot, [p["text"] for p in prefs], sorted(watching), sorted(dismissed),
+                                 gaps.season_for(day), config.PLAN_PROVIDER], sort_keys=True, default=str).encode())
+        cached = None if fresh else self.cache.get("gaps", key)
+        if cached:
+            return {**cached, "trace": {**cached["trace"], "cached": True}}
+
+        pieces, trace, source = [], {"failures": []}, "rules"
+        if self.settings.live:
+            for provider in [config.PLAN_PROVIDER] + [p for p in ("meta",) if p != config.PLAN_PROVIDER]:
+                try:
+                    report, t = await asyncio.to_thread(gaps.find_gaps_with_agent, items, prefs, day, note,
+                                                        watching, dismissed, provider)
+                    pieces = gaps.clean_report(report, items)
+                    if pieces:
+                        trace, source, summary = {**t, "failures": trace["failures"]}, "agent", report.summary
+                        break
+                    trace["failures"].append(f"{provider}: no usable pieces")
+                except Exception as e:
+                    trace["failures"].append(f"{provider}: {type(e).__name__}: {e}"[:300])
+        if not pieces:
+            report = gaps.find_gaps_with_rules(items, dismissed, watching)
+            pieces, summary = gaps.clean_report(report, items), report.summary
+            trace = {**trace, "provider": "rules"}
+        record = {"created_at": now(), "source": source, "summary": summary, "pieces": pieces, "trace": trace}
+        if source == "agent":
+            self.cache.put("gaps", key, record)
+        return record
 
 
 def today_local() -> date:
