@@ -189,7 +189,7 @@ export default function Today({ ctx }: { ctx: AppCtx }) {
               <Thinking slow={load.state === "thinking" && ctx.health?.mode === "live"} />
             ) : (
               <>
-                <Collage key={plan!.id + lookIndex} items={look.items} onOpen={ctx.openItem} />
+                <Collage key={plan!.id + lookIndex} items={look.items} onOpen={ctx.openItem} onTryOn={() => ctx.openTryOn(plan!, lookIndex)} />
                 <h2 className="display" style={{ fontSize: 22, lineHeight: 1.05 }}>{look.name}</h2>
                 <p style={{ margin: 0, fontSize: 14, lineHeight: 1.55 }}>{look.why}</p>
               </>
@@ -403,10 +403,18 @@ const FRAMES: Record<number, { l: number; t: number; w: number; h: number; r: nu
 
 // The unworn sticker goes by the item's own idle days, not the plan's rediscovered_id: the rule
 // picker treats never-worn items as forgotten, which would flag clothes scanned this morning.
-function Collage({ items, onOpen }: { items: Item[]; onOpen: (i: Item) => void }) {
+function Collage({ items, onOpen, onTryOn }: { items: Item[]; onOpen: (i: Item) => void; onTryOn: () => void }) {
   const frames = FRAMES[Math.min(items.length, 4)] ?? FRAMES[4];
   return (
     <div className="halftone" style={{ position: "relative", height: 236, borderRadius: 8, overflow: "hidden", border: "var(--line)" }}>
+      <button
+        type="button"
+        className="chip press"
+        onClick={onTryOn}
+        style={{ position: "absolute", zIndex: 10, right: 8, bottom: 8, height: 32, fontSize: 12, padding: "0 10px" }}
+      >
+        Try it on <span lang="ja">試着</span> →
+      </button>
       {items.slice(0, 4).map((it, i) => {
         const f = frames[i];
         const idle = idleDays(it);

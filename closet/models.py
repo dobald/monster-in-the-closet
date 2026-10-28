@@ -6,6 +6,7 @@ import base64
 import io
 import re
 from pathlib import Path
+from typing import Callable
 
 import httpx
 from PIL import Image
@@ -166,22 +167,27 @@ def render_best(
     profile: BodyProfile | None = None,
     max_attempts: int = 2,
     good_enough: int = 4,
+    on_step: Callable[[str], None] | None = None,
 ) -> dict:
     """Generate, judge, and retry once with the judge's corrections; keep the best render.
 
     The judge writes concrete differences ("jeans should be darker indigo and wide-leg").
     Feeding those back as corrections turns it into a critic the generator listens to.
-    Stops early once review_score() reaches good_enough.
+    Stops early once review_score() reaches good_enough. `on_step` gets "render 1",
+    "judge 1", "render 2"... so a UI can show progress.
     """
+    step = on_step or (lambda _: None)
     attempts, note = [], ""
     _, requested_view = outfit_brief(tags, garments)
     for n in range(max_attempts):
+        step(f"render {n + 1}")
         if person is not None:
             img, status = render_on_person(person, garments, tags, note)
         else:
             img, status = render_on_mannequin(profile, garments, tags, note)
         attempt = {"n": n + 1, "status": status, "note": note, "image": img, "review": None, "score": 0}
         if img is not None:
+            step(f"judge {n + 1}")
             review = judge_render(garments, img, person=person, profile=profile, requested_view=requested_view)
             attempt["review"] = review
             attempt["score"] = review_score(review, mannequin=person is None)

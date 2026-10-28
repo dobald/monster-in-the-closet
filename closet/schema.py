@@ -216,7 +216,11 @@ class SubjectCheck(BaseModel):
     """Who wears the outfit, judged once per render instead of once per garment."""
 
     notes: str = Field(description="What you see about the wearer, before scoring.")
-    has_human_face: bool = Field(description="True if the wearer shows human facial features (eyes, nose, mouth).")
+    has_human_face: bool = Field(
+        description="True only if the wearer looks like a real person's face: eyes, realistic skin, hair or an "
+                    "expression. A display-mannequin head with blank sculpted features (a nose ridge or lip shape, "
+                    "no eyes, same matte finish as the body) is NOT a human face."
+    )
     matches_request: int = Field(
         ge=1, le=5,
         description="Mannequin: finish colour and build/form roughly as requested (do not judge exact height). "

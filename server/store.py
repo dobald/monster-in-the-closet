@@ -72,6 +72,10 @@ CREATE TABLE IF NOT EXISTS distinct_pairs (
     b TEXT NOT NULL,
     PRIMARY KEY (a, b)
 );
+CREATE TABLE IF NOT EXISTS settings (
+    key    TEXT PRIMARY KEY,             -- e.g. "tryon": mode, body profile, photo check
+    value  TEXT NOT NULL                 -- JSON
+);
 CREATE TABLE IF NOT EXISTS thrift (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     created_at  TEXT NOT NULL,
@@ -275,6 +279,17 @@ class Store:
     def delete_preference(self, pref_id: int) -> bool:
         with self._lock, self._db:
             return self._db.execute("DELETE FROM preferences WHERE id = ?", (pref_id,)).rowcount > 0
+
+    # -- settings
+
+    def get_setting(self, key: str) -> dict | None:
+        with self._lock:
+            row = self._db.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+        return json.loads(row[0]) if row else None
+
+    def put_setting(self, key: str, value: dict) -> None:
+        with self._lock, self._db:
+            self._db.execute("INSERT OR REPLACE INTO settings VALUES (?, ?)", (key, json.dumps(value)))
 
     # -- thrift list
 

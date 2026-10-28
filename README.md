@@ -174,6 +174,45 @@ Live, on the 7-garment test closet (12s, ~1k tokens in / 3.6k out): an olive woo
 
 In the app, the Thrift tab shows gap cards with a "+N NEW OUTFITS" sticker, the pieces you own that it goes with, and the "what to look for" tips. Your list appears as WANTED 求む posters. "Found it!" stamps a poster 済 and sends you to Scan to add the piece to your closet.
 
+## Try-on in the app
+
+"Try it on 試着" on any Today look opens the try-on. The first time, it asks **who wears it**:
+- **Mannequin** (the default): height, build, form and a finish colour, with a live preview figure. No photo of you is used.
+- **My photo** (opt-in):
+  - you have to tick a consent box first
+  - Muse Spark checks the photo for one person, head to feet, face visible; a photo that fails is never stored
+  - a photo that passes is re-encoded before saving, which strips location and camera details
+  - one tap deletes it, along with every render made from it
+- **Flat-lay only:** your real cutouts, no body.
+
+**How a render is made:** it runs as a background job and the app shows progress. Muse Image renders the look, Muse Spark judges it against your real garments, and Muse Image retries once with the judge's corrections. The app shows the match score (1–5), any differences the judge found, and a one-tap "Flat-lay (exact)" view. Finished renders are cached per look and wearer, so a repeat is free and instant. Fixture mode serves cached renders, and otherwise shows the flat-lay.
+
+**Live result:** a grey acid-wash tee with striped track pants on a 172 cm neutral mannequin took 70s and 2 tries, and scored 5/5.
+
+That run also exposed a judge bug: it scored the render 2/5 because the mannequin's sculpted nose and lips counted as a "human face". The face rule now only triggers on a realistic face (eyes, skin, hair). Wearer notes are also shown whenever they cost points, so a low score always comes with a reason.
+
+| Endpoint | What it does |
+|---|---|
+| `GET` / `PUT /api/tryon/profile` | Mode and mannequin details; `ready` says whether try-on can run |
+| `POST` / `DELETE /api/tryon/photo` | The face version: upload (multipart `photo` + `consent=true`), checked before it's kept; delete removes its renders |
+| `POST /api/tryon` | `{plan_id, look}`: starts or reuses a render job |
+| `GET /api/tryon/jobs/{id}` | Poll: status, progress step, score, differences, render and flat-lay URLs |
+
+## Testing on your phone
+
+The phone and the computer must be on the same Wi-Fi.
+
+```bash
+python -m server.dev --live                 # API in live mode: real models, every result cached
+cd web && npm run dev:lan                   # front end, reachable from the phone
+```
+
+Then open `http://<your computer's Wi-Fi IP>:5173` on the phone. The first time, Windows may ask whether Node can accept connections; allow it on private networks.
+
+The API itself only listens on localhost, and the phone reaches it through the Vite proxy. Anyone on the same Wi-Fi could open the app while this runs, so only use it on a network you trust. Live mode spends credits: scans, plans, check-ins, thrift and try-on all call real models.
+
+In the Claude desktop app, the `api-live` and `web-lan` launch configs do the same.
+
 ## Front end (mobile web)
 
 React + Vite in `web/`, styled after the Tokyo-street wireframes (washi, sumi, shu for the oni, ai for your day). Run the API and the dev server side by side; Vite proxies `/api` to port 8000:

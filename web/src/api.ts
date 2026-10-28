@@ -170,6 +170,47 @@ export interface ThriftEntry {
   piece: GapPiece;
 }
 
+export type TryOnMode = "mannequin" | "photo" | "flat";
+
+export interface BodyProfile {
+  height_cm: number;
+  build: "slim" | "regular" | "athletic" | "curvy" | "plus";
+  silhouette: "feminine" | "masculine" | "neutral";
+  skin_tone: number; // 1-8, the mannequin's finish
+}
+
+export interface TryOnProfile {
+  mode: TryOnMode;
+  body: BodyProfile | null;
+  ready: boolean;
+  photo: { checked_at: string; advice: string } | null;
+}
+
+export interface PhotoCheck {
+  ok: boolean;
+  advice: string;
+  one_person: boolean;
+  full_body: boolean;
+  face_visible: boolean;
+}
+
+export interface TryOnJob {
+  id: string;
+  status: "running" | "done" | "failed";
+  step?: string;
+  look_name: string;
+  mode: TryOnMode;
+  flatlay_url: string;
+  render_url: string | null;
+  cached: boolean;
+  score: number | null;
+  attempts: number;
+  differences: string[];
+  seconds: number | null;
+  error: string | null;
+  note: string | null;
+}
+
 export interface Health {
   ok: boolean;
   mode: "fixture" | "live";
@@ -217,6 +258,18 @@ export const api = {
   findDuplicates: () => call<Duplicates>("/api/wardrobe/duplicates/check", { method: "POST" }),
   mergeItems: (a: string, b: string) => call<Item>("/api/wardrobe/duplicates/merge", json("POST", { a, b })),
   notDuplicates: (a: string, b: string) => call<void>("/api/wardrobe/duplicates/distinct", json("POST", { a, b })),
+  tryonProfile: () => call<TryOnProfile>("/api/tryon/profile"),
+  setTryonProfile: (mode: TryOnMode, body?: BodyProfile) =>
+    call<TryOnProfile>("/api/tryon/profile", json("PUT", { mode, body: body ?? null })),
+  uploadPersonPhoto: (photo: File, consent: boolean) => {
+    const form = new FormData();
+    form.append("photo", photo, photo.name);
+    form.append("consent", String(consent));
+    return call<PhotoCheck>("/api/tryon/photo", { method: "POST", body: form });
+  },
+  deletePersonPhoto: () => call<{ renders_deleted: number }>("/api/tryon/photo", { method: "DELETE" }),
+  startTryon: (planId: string, look: number) => call<TryOnJob>("/api/tryon", json("POST", { plan_id: planId, look })),
+  tryonJob: (id: string) => call<TryOnJob>(`/api/tryon/jobs/${id}`),
   gaps: (fresh = false) => call<Gaps>("/api/gaps", json("POST", { fresh })),
   thrift: () => call<ThriftEntry[]>("/api/thrift"),
   addThrift: (piece: GapPiece, status: "watching" | "dismissed" = "watching") =>

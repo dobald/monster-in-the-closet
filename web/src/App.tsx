@@ -8,6 +8,7 @@ import Thrift from "./screens/Thrift";
 import Worn from "./screens/Worn";
 import Checkin from "./screens/Checkin";
 import ItemSheet from "./screens/ItemSheet";
+import TryOn from "./screens/TryOn";
 
 export type Tab = "today" | "closet" | "scan" | "thrift" | "notes";
 
@@ -15,6 +16,7 @@ type Overlay =
   | { kind: "worn"; result: WearResult; plan: Plan; lookIndex: number }
   | { kind: "checkin"; plan: Plan | null; lookIndex: number | null }
   | { kind: "item"; item: Item }
+  | { kind: "tryon"; plan: Plan | null; lookIndex: number | null; setupOnly: boolean }
   | null;
 
 export interface AppCtx {
@@ -25,9 +27,12 @@ export interface AppCtx {
   openItem: (item: Item) => void;
   openCheckin: (plan: Plan | null, lookIndex: number | null) => void;
   showWorn: (result: WearResult, plan: Plan, lookIndex: number) => void;
+  openTryOn: (plan: Plan, lookIndex: number) => void;
+  openTryOnSetup: () => void;
   toast: (msg: string) => void;
   wardrobeVersion: number;
   bumpWardrobe: () => void;
+  refreshKey: number; // bumps whenever an overlay closes, so screens behind it can re-read settings
 }
 
 export default function App() {
@@ -37,6 +42,7 @@ export default function App() {
   const [health, setHealth] = useState<Health | null>(null);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
   const [wardrobeVersion, setWardrobeVersion] = useState(0);
+  const [refreshKey, setRefreshKey] = useState(0);
 
   const refreshOni = useCallback(() => {
     api.oni().then(setOni).catch(() => {});
@@ -63,13 +69,17 @@ export default function App() {
     // The wear response carries the look without expanded items; take them from the plan.
     showWorn: (result, plan, lookIndex) =>
       setOverlay({ kind: "worn", result: { ...result, look: plan.looks[lookIndex] }, plan, lookIndex }),
+    openTryOn: (plan, lookIndex) => setOverlay({ kind: "tryon", plan, lookIndex, setupOnly: false }),
+    openTryOnSetup: () => setOverlay({ kind: "tryon", plan: null, lookIndex: null, setupOnly: true }),
     toast: setToastMsg,
     wardrobeVersion,
     bumpWardrobe: () => setWardrobeVersion((v) => v + 1),
+    refreshKey,
   };
 
   const close = () => {
     setOverlay(null);
+    setRefreshKey((k) => k + 1);
     refreshOni();
   };
 
@@ -94,6 +104,9 @@ export default function App() {
         <Checkin plan={overlay.plan} lookIndex={overlay.lookIndex} ctx={ctx} onDone={close} />
       )}
       {overlay?.kind === "item" && <ItemSheet item={overlay.item} ctx={ctx} onClose={close} />}
+      {overlay?.kind === "tryon" && (
+        <TryOn plan={overlay.plan} lookIndex={overlay.lookIndex} setupOnly={overlay.setupOnly} ctx={ctx} onClose={close} />
+      )}
 
       {toastMsg && (
         <div className="toast" role="status">

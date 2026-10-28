@@ -124,6 +124,10 @@ BOTTOM = {**GARMENT, "category": "bottom", "subtype": "wide-leg jeans", "primary
           "fit": "wide-leg, loose", "print_side": "unknown", "distinctive_details": "none"}
 
 
+def store_has(c: TestClient, item_id: str) -> bool:
+    return c.get(f"/api/wardrobe/{item_id}").status_code == 200
+
+
 def test_plan_wear_checkin(var_dir: Path, run_dir: Path) -> None:
     """Fixture mode: rules planner, wearing a look, a check-in that learns, the oni's mood."""
     # Make the seeded wardrobe a real outfit: one top, one bottom.
@@ -177,6 +181,50 @@ def test_plan_wear_checkin(var_dir: Path, run_dir: Path) -> None:
         again = c.post("/api/gaps").json()["pieces"]
         assert coat["name"] not in [p["name"] for p in again], "a dismissed piece is not suggested again"
         assert c.delete(f"/api/thrift/{tid}").status_code == 204
+
+        # Try-on in fixture mode: setup rules, flat-lay fallback, cached renders, photo privacy.
+        tryon = main.app.state.tryon
+        assert c.get("/api/tryon/profile").json() == {"mode": "mannequin", "body": None, "ready": False, "photo": None}
+        assert c.post("/api/tryon", json={"plan_id": plan["id"], "look": 0}).status_code == 409, "not set up yet"
+        assert c.put("/api/tryon/profile", json={"mode": "mannequin"}).status_code == 422, "a mannequin needs details"
+        assert c.put("/api/tryon/profile", json={"mode": "mannequin", "body": {"height_cm": 300}}).status_code == 422
+        body = {"height_cm": 172, "build": "regular", "silhouette": "neutral", "skin_tone": 4}
+        assert c.put("/api/tryon/profile", json={"mode": "mannequin", "body": body}).json()["ready"]
+        job = c.post("/api/tryon", json={"plan_id": plan["id"], "look": 0}).json()
+        assert job["status"] == "done" and job["render_url"] is None and "live mode" in job["note"], job
+        assert c.get(job["flatlay_url"]).status_code == 200, "the flat-lay always exists"
+        assert c.post("/api/tryon", json={"plan_id": plan["id"], "look": 7}).status_code == 422
+
+        # A cached render (as live mode would record it) is served in fixture mode with its score.
+        look_ids = [i for i in plan["looks"][0]["item_ids"] if store_has(c, i)]
+        key = tryon._key(look_ids, tryon.profile())
+        Image.new("RGB", (20, 40), "grey").save(tryon.render_dir / f"{key}.png")
+        tryon.cache.put("renders", key, {"file": f"{key}.png", "photo_sha": None, "score": 5, "attempts": 1,
+                                         "differences": [], "seconds": 40.0})
+        job = c.post("/api/tryon", json={"plan_id": plan["id"], "look": 0}).json()
+        assert job["cached"] and job["score"] == 5 and c.get(job["render_url"]).status_code == 200, job
+
+        # The face version: consent first, and checking a photo needs live mode.
+        jpg = photo_bytes(9)
+        r = c.post("/api/tryon/photo", files={"photo": ("me.jpg", jpg, "image/jpeg")}, data={"consent": "false"})
+        assert r.status_code == 422, r.text
+        r = c.post("/api/tryon/photo", files={"photo": ("me.jpg", jpg, "image/jpeg")}, data={"consent": "true"})
+        assert r.status_code == 409 and "live mode" in r.json()["detail"], r.text
+        assert c.put("/api/tryon/profile", json={"mode": "photo"}).status_code == 422, "no photo on file"
+        # Simulate a checked photo with one render made from it; deleting the photo deletes that render too.
+        tryon.photo_path.write_bytes(jpg)
+        prof = tryon.profile()
+        prof["photo"] = {"sha": "abc123", "advice": "Looks good.", "checked_at": "2026-10-28T00:00:00+00:00"}
+        tryon.store.put_setting("tryon", prof)
+        (tryon.render_dir / "facerender.png").write_bytes(b"x")
+        tryon.cache.put("renders", "facekey", {"file": "facerender.png", "photo_sha": "abc123", "score": 4,
+                                               "attempts": 1, "differences": [], "seconds": 30.0})
+        assert c.put("/api/tryon/profile", json={"mode": "photo"}).json()["mode"] == "photo"
+        assert c.delete("/api/tryon/photo").json() == {"renders_deleted": 1}
+        assert not tryon.photo_path.exists() and not (tryon.render_dir / "facerender.png").exists()
+        p = c.get("/api/tryon/profile").json()
+        assert p["mode"] == "mannequin" and p["photo"] is None, p
+        assert c.get(f"/api/renders/{key}.png").status_code == 200, "mannequin renders are kept"
 
 
 def _items_for_planner() -> list[dict]:
@@ -353,7 +401,7 @@ def main_() -> None:
         test_gap_math()
         test_agent_loop_and_repair()
         test_duplicates(tmp / "dupes")
-        print("OK: fixture mode, seeding, tag fixes, caching, dedupe, planning, wear, check-ins, the agent loop, gap finder "
+        print("OK: fixture mode, seeding, tag fixes, caching, dedupe, planning, wear, check-ins, the agent loop, gap finder, try-on "
               "and cross-photo duplicates all behave.")
     finally:
         shutil.rmtree(run_dir, ignore_errors=True)

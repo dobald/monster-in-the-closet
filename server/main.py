@@ -13,7 +13,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any, Literal
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel, ValidationError
@@ -26,6 +26,7 @@ from .cache import Cache
 from .pipeline import FixtureMissing, Pipeline
 from .planning import Planning, today_local
 from .store import Store
+from .tryon import TryOn
 
 MAX_PHOTOS = 10
 MAX_PHOTO_BYTES = 25 * 1024 * 1024
@@ -120,6 +121,7 @@ async def lifespan(app: FastAPI):
     app.state.settings, app.state.store = s, store
     app.state.pipeline = Pipeline(s, cache, store)
     app.state.planning = Planning(s, cache, store)
+    app.state.tryon = TryOn(s, cache, store)
     yield
 
 
@@ -384,6 +386,79 @@ def update_thrift(thrift_id: int, body: ThriftStatusIn) -> None:
 def remove_thrift(thrift_id: int) -> None:
     if not app.state.store.delete_thrift(thrift_id):
         raise HTTPException(404, "Not on the thrift list.")
+
+
+class TryOnProfileIn(BaseModel):
+    mode: Literal["mannequin", "photo", "flat"]
+    body: dict[str, Any] | None = None  # BodyProfile fields, for the mannequin
+
+
+class TryOnIn(BaseModel):
+    plan_id: str
+    look: int = 0
+
+
+@app.get("/api/tryon/profile")
+def tryon_profile() -> dict:
+    """Who wears the try-on: mannequin details, whether a checked photo is on file, and if it's ready."""
+    return app.state.tryon.public_profile()
+
+
+@app.put("/api/tryon/profile")
+def set_tryon_profile(body: TryOnProfileIn) -> dict:
+    try:
+        return app.state.tryon.set_profile(body.mode, body.body)
+    except (ValueError, ValidationError) as e:
+        raise HTTPException(422, str(e))
+
+
+@app.post("/api/tryon/photo")
+async def upload_person_photo(photo: UploadFile = File(...), consent: bool = Form(False)) -> dict:
+    """The opt-in face version. Needs consent; the photo is checked and only stored if it passes."""
+    data = await photo.read()
+    if len(data) > MAX_PHOTO_BYTES:
+        raise HTTPException(413, "That photo is too large.")
+    try:
+        return await app.state.tryon.set_photo(data, consent)
+    except ValueError as e:
+        raise HTTPException(422 if "confirm" in str(e) else 409, str(e))
+
+
+@app.delete("/api/tryon/photo")
+def delete_person_photo() -> dict:
+    """One tap: the photo and every render made from it are deleted."""
+    return {"renders_deleted": app.state.tryon.delete_photo()}
+
+
+@app.post("/api/tryon")
+async def start_tryon(body: TryOnIn) -> dict:  # async: the render job is scheduled on this event loop
+    """Start (or reuse) a render of one look. Poll GET /api/tryon/jobs/{id} until status is done."""
+    try:
+        return app.state.tryon.start(body.plan_id, body.look)
+    except KeyError as e:
+        raise HTTPException(404, str(e).strip("'\""))
+    except IndexError as e:
+        raise HTTPException(422, str(e))
+    except ValueError as e:
+        raise HTTPException(409, str(e))
+
+
+@app.get("/api/tryon/jobs/{job_id}")
+def tryon_job(job_id: str) -> dict:
+    job = app.state.tryon.jobs.get(job_id)
+    if not job:
+        raise HTTPException(404, "No such try-on job (the server may have restarted).")
+    return job
+
+
+@app.get("/api/renders/{name}.png")
+def render_file(name: str) -> FileResponse:
+    if not name.replace("-", "").isalnum():
+        raise HTTPException(404, "No such render.")
+    path = app.state.tryon.render_dir / f"{name}.png"
+    if not path.exists():
+        raise HTTPException(404, "No such render.")
+    return FileResponse(path, media_type="image/png", headers={"Cache-Control": "private, max-age=86400"})
 
 
 @app.get("/api/oni")

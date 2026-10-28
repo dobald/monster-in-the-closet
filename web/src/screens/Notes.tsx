@@ -1,18 +1,24 @@
 import { useEffect, useState } from "react";
-import { api, type Preference } from "../api";
+import { api, type Preference, type TryOnMode, type TryOnProfile } from "../api";
 import type { AppCtx } from "../App";
 import Oni, { MOOD_LABEL } from "../Oni";
 import { AliveBar } from "./Today";
 
-// The oni's notebook: its mood, the closet-alive meter, and every preference it has learned
-// from check-ins, each one forgettable.
+// The oni's notebook: its mood, the closet-alive meter, try-on settings, and every preference
+// it has learned from check-ins, each one forgettable.
+
+const TRYON_LABEL: Record<TryOnMode, string> = { mannequin: "Mannequin", photo: "My photo", flat: "Flat-lay only" };
 
 export default function Notes({ ctx }: { ctx: AppCtx }) {
   const [prefs, setPrefs] = useState<Preference[] | null>(null);
+  const [tryon, setTryon] = useState<TryOnProfile | null>(null);
 
   useEffect(() => {
     api.preferences().then(setPrefs).catch(() => setPrefs([]));
   }, []);
+  useEffect(() => {
+    api.tryonProfile().then(setTryon).catch(() => {});
+  }, [ctx.refreshKey]);
 
   const forget = async (p: Preference) => {
     await api.forget(p.id).catch((e) => ctx.toast((e as Error).message));
@@ -59,6 +65,24 @@ export default function Notes({ ctx }: { ctx: AppCtx }) {
         </div>
         <span className="small muted">Closet alive = pieces worn in the last 30 days. It sets the oni's mood. No guilt: one rescued piece flips it to Fed.</span>
       </div>
+
+      <button
+        type="button"
+        className="card press"
+        onClick={ctx.openTryOnSetup}
+        style={{ padding: "10px 12px", display: "flex", alignItems: "center", gap: 10, textAlign: "left", boxShadow: "3px 3px 0 var(--sumi)" }}
+      >
+        <span style={{ flex: 1, display: "flex", flexDirection: "column", gap: 2 }}>
+          <span className="label">TRY-ON · <span lang="ja">試着</span></span>
+          <strong style={{ fontSize: 14 }}>{tryon ? TRYON_LABEL[tryon.mode] : "…"}</strong>
+          <span className="small muted">
+            {tryon?.mode === "mannequin" && tryon.body
+              ? `${tryon.body.height_cm} cm · ${tryon.body.build} · ${tryon.body.silhouette}`
+              : tryon?.mode === "photo" ? "Your checked photo. Deletable anytime." : tryon?.ready === false ? "Not set up yet" : "No body, just your real cutouts"}
+          </span>
+        </span>
+        <span aria-hidden="true" style={{ fontWeight: 700 }}>Edit →</span>
+      </button>
 
       <section aria-label="Learned preferences" style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 4 }}>
         <span className="label">LEARNED FROM YOUR CHECK-INS</span>
