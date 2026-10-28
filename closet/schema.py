@@ -151,6 +151,7 @@ class Touch(BaseModel):
 
 class TouchSet(BaseModel):
     touches: list[Touch] = Field(description="3 finishing touches, best first.")
+    recall: str = Field(default="", description="A 'Got one?' sentence when a piece was given, else empty.")
 
 
 GapCategory = Literal["top", "bottom", "dress", "outerwear"]

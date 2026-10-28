@@ -84,7 +84,7 @@ export interface Plan {
 
 export interface Touch {
   play: string;
-  kind: "underlayer" | "accessory" | "technique";
+  kind: "underlayer" | "accessory" | "technique" | "colour";
   name: string;
   item: string;
   suggestion: string;
@@ -94,7 +94,18 @@ export interface Touch {
   owned_label: string | null;
 }
 
+export interface ColourRead {
+  summary: string; // e.g. "all neutral · high contrast · cool"
+  scheme: string;
+  contrast: string;
+  temperature: string;
+  idea: string;
+  palette: { item_id: string; name: string; hex: string; neutral: boolean }[];
+}
+
 export interface Touches {
+  colour: ColourRead;
+  recall: { id: string; name: string; text: string } | null; // a core piece the closet has none of: scan yours in
   touches: Touch[];
   source: "agent" | "rules";
   trace: { provider?: string; model?: string; seconds?: number; cached?: boolean };

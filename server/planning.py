@@ -13,7 +13,7 @@ import json
 import uuid
 from datetime import date, datetime, timedelta, timezone
 
-from closet import config, gaps, planner, styling, tools
+from closet import colour, config, gaps, planner, styling, tools
 from closet.schema import CheckinLearning, OutfitPlan
 
 from .cache import Cache, sha256
@@ -22,7 +22,7 @@ from .store import Store, now
 
 PLAN_VERSION = "plan1"
 GAP_VERSION = "gaps1"
-TOUCH_VERSION = "touch2"
+TOUCH_VERSION = "touch3"
 COLD_C = 8  # feels-like at or below this is "cold" for scarves, beanies and long-sleeve layers
 ALIVE_WINDOW_DAYS = 30
 RESCUE_DAYS = 30
@@ -292,7 +292,7 @@ class Planning:
         if basics is not None:
             st["basics"] = sorted(set(b for b in basics if b in styling.BASIC_LABELS))
         if skip is not None:
-            st["skip"] = sorted(set(x for x in skip if x in styling.PLAYS))
+            st["skip"] = sorted(set(x for x in skip if x in styling.PLAYS or x in styling.RECALL_BY_ID))
         self.store.put_setting("style", st)
         return st
 
@@ -314,24 +314,29 @@ class Planning:
         smart = any(e.get("dress_code") for e in events) or any(i["tags"]["formality"] in ("smart_casual", "business", "formal") for i in items)
         weather_note = f"feels like {coldest}°C at the coldest" + (" (cold: layers and warm accessories welcome)" if cold else "")
         plans_note = ", ".join(f"{e['start']} {e['title']}" + (f" ({e['dress_code']})" if e.get("dress_code") else "") for e in events) or "No plans"
+        read = colour.read(items, self.settings.cutout_dir)
+        recall = styling.recall_for(self._garments(), cold, smart, skip, look_index)
+        colour_out = {k: read[k] for k in ("summary", "scheme", "contrast", "temperature", "idea")}
+        colour_out["palette"] = [{k: p[k] for k in ("item_id", "name", "hex", "neutral")} for p in read["palette"]]
 
         # Touches already given for this plan's earlier looks, so each look gets its own ideas. Earlier only:
         # look 0 stays stable however the user browses, and its cache entry keeps working.
         elsewhere = {t["play"] for n, ts in (self._given.get(plan_id) or {}).items() if n < look_index for t in ts}
         key = sha256((TOUCH_VERSION + config.PLAN_PROVIDER + styling.cache_parts(items, owned, skip, weather_note, plans_note)
-                      + ",".join(sorted(elsewhere))).encode())
+                      + ",".join(sorted(elsewhere)) + (recall.id if recall else "")).encode())
         hit = self.cache.get("touches", key)
         if hit:
             self._given.setdefault(plan_id, {})[look_index] = hit["touches"]
             return {**hit, "trace": {**hit["trace"], "cached": True}}
 
-        touches, trace, source = [], {"failures": []}, "rules"
+        touches, trace, source, recall_text = [], {"failures": []}, "rules", ""
         if self.settings.live:
             for provider in [config.PLAN_PROVIDER] + [p for p in ("meta",) if p != config.PLAN_PROVIDER]:
                 try:
                     picked, t = await asyncio.to_thread(styling.touches_with_agent, items, weather_note, plans_note,
-                                                        owned, skip, provider, elsewhere)
+                                                        owned, skip, provider, elsewhere, colour.prompt_line(read), recall)
                     touches = styling.clean(picked, owned, skip)
+                    recall_text = picked.recall.strip()
                     if touches:
                         trace, source = {**t, "failures": trace["failures"]}, "agent"
                         break
@@ -339,9 +344,14 @@ class Planning:
                 except Exception as e:
                     trace["failures"].append(f"{provider}: {type(e).__name__}: {e}"[:300])
         if not touches:
-            touches = styling.touches_with_rules(items, cold, smart, owned, skip)
+            touches = styling.touches_with_rules(items, cold, smart, owned, skip, read["idea_play"])
             trace = {**trace, "provider": "rules"}
-        out = {"plan_id": plan_id, "look": look_index, "touches": touches, "source": source, "trace": trace}
+        recall_out = None
+        if recall:
+            text = recall_text or f"Got {recall.name}? It would {recall.lift}. If it's tucked away somewhere, scan it in."
+            recall_out = {"id": recall.id, "name": recall.name, "text": text}
+        out = {"plan_id": plan_id, "look": look_index, "touches": touches, "source": source, "trace": trace,
+               "colour": colour_out, "recall": recall_out}
         if source == "agent":
             self.cache.put("touches", key, out)
         self._given.setdefault(plan_id, {})[look_index] = touches

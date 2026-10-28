@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, type Plan, type Style, type Touch } from "../api";
+import { api, type Plan, type Style, type Touch, type Touches as TouchesOut } from "../api";
 import type { AppCtx } from "../App";
 
 // 仕上げ (shiage, "finishing"): the small things that make a look. An underlayer peeking out, a
@@ -7,6 +7,7 @@ import type { AppCtx } from "../App";
 // this" adds the basic to their checklist; "Not me" tells the oni to stop suggesting it.
 
 const KIND: Record<Touch["kind"], { ja: string; en: string }> = {
+  colour: { ja: "配色", en: "COLOUR" },
   underlayer: { ja: "重ね", en: "LAYER" },
   technique: { ja: "技", en: "TRICK" },
   accessory: { ja: "小物", en: "EXTRA" },
@@ -14,14 +15,14 @@ const KIND: Record<Touch["kind"], { ja: string; en: string }> = {
 
 export default function Touches({ plan, lookIndex, ctx }: { plan: Plan; lookIndex: number; ctx: AppCtx }) {
   const key = `${plan.id}:${lookIndex}`;
-  const [byLook, setByLook] = useState<Record<string, Touch[] | "loading" | "error">>({});
+  const [byLook, setByLook] = useState<Record<string, TouchesOut | "loading" | "error">>({});
   const [style, setStyle] = useState<Style | null>(null);
 
   const load = (fresh = false) => {
     if (!fresh && byLook[key]) return;
     setByLook((b) => ({ ...b, [key]: "loading" }));
     api.touches(plan.id, lookIndex)
-      .then((r) => setByLook((b) => ({ ...b, [key]: r.touches })))
+      .then((r) => setByLook((b) => ({ ...b, [key]: r })))
       .catch(() => setByLook((b) => ({ ...b, [key]: "error" })));
   };
 
@@ -39,7 +40,18 @@ export default function Touches({ plan, lookIndex, ctx }: { plan: Plan; lookInde
     setStyle(next);
     const label = next.catalog.flatMap((g) => g.items).find((i) => i.key === t.needs[0])?.label ?? "it";
     ctx.toast(`Noted: you have ${label.toLowerCase()}. The oni will lean on it.`);
-    setByLook((b) => ({ ...b, [key]: (b[key] as Touch[]).map((x) => (x.play === t.play ? { ...x, owned: true, owned_label: label } : x)) }));
+    setByLook((b) => {
+      const cur = b[key] as TouchesOut;
+      return { ...b, [key]: { ...cur, touches: cur.touches.map((x) => (x.play === t.play ? { ...x, owned: true, owned_label: label } : x)) } };
+    });
+  };
+
+  const noneOfThose = async (id: string, name: string) => {
+    if (!style) return;
+    setStyle(await api.updateStyle({ skip: [...new Set([...style.skip, id])] }));
+    ctx.toast(`Noted, no ${name}. If you want one, the Thrift tab finds them second-hand.`);
+    setByLook({});
+    load(true);
   };
 
   const notMe = async (t: Touch) => {
@@ -51,8 +63,21 @@ export default function Touches({ plan, lookIndex, ctx }: { plan: Plan; lookInde
   };
 
   const state = byLook[key];
+  const ready = state && state !== "loading" && state !== "error" ? state : null;
   return (
     <section aria-label="Finishing touches" style={{ display: "flex", flexDirection: "column", gap: 8, borderTop: "1.5px dashed var(--sumi)", paddingTop: 10 }}>
+      {ready && (
+        <div aria-label={`Colour read: ${ready.colour.summary}`} style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <span style={{ display: "flex" }} aria-hidden="true">
+            {ready.colour.palette.map((p, i) => (
+              <span key={p.item_id} title={`${p.name} ${p.hex}`} style={{ width: 22, height: 22, borderRadius: "50%", border: "var(--line)", background: p.hex, marginLeft: i ? -6 : 0 }} />
+            ))}
+          </span>
+          <span className="label">
+            <span lang="ja">配色</span> · {ready.colour.summary.toUpperCase()}
+          </span>
+        </div>
+      )}
       <span className="label">
         FINISHING TOUCHES · <span lang="ja">仕上げ</span>
       </span>
@@ -66,7 +91,7 @@ export default function Touches({ plan, lookIndex, ctx }: { plan: Plan; lookInde
         </button>
       ) : (
         <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexDirection: "column", gap: 8 }}>
-          {state.map((t, i) => (
+          {state.touches.map((t, i) => (
             <li key={t.play} style={{ display: "grid", gridTemplateColumns: "40px 1fr", gap: 10, animation: `rise .3s ease-out ${i * 0.08}s both` }}>
               <span
                 aria-hidden="true"
@@ -102,6 +127,27 @@ export default function Touches({ plan, lookIndex, ctx }: { plan: Plan; lookInde
             </li>
           ))}
         </ul>
+      )}
+      {ready?.recall && (
+        <div
+          style={{
+            marginTop: 4, display: "flex", flexDirection: "column", gap: 8, padding: "10px 12px", borderRadius: 10,
+            border: "1.5px dashed var(--shu)", background: "var(--washi)", animation: "rise .3s ease-out .25s both",
+          }}
+        >
+          <span className="label" style={{ color: "var(--shu)" }}>
+            GOT ONE? · <span lang="ja">探して</span>
+          </span>
+          <span style={{ fontSize: 14, fontWeight: 700, lineHeight: 1.4 }}>{ready.recall.text}</span>
+          <span style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            <button type="button" className="chip shu press" style={{ height: 30, fontSize: 12 }} onClick={() => ctx.go("scan")}>
+              Scan it in →
+            </button>
+            <button type="button" className="chip press" style={{ height: 30, fontSize: 12 }} onClick={() => noneOfThose(ready.recall!.id, ready.recall!.name)}>
+              I don't have one
+            </button>
+          </span>
+        </div>
       )}
     </section>
   );

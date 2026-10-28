@@ -122,18 +122,81 @@ PLAYBOOK: list[Play] = [
          "Any look with full-length trousers.",
          "Wide or heavy trousers want a chunky sneaker or boot; slimmer trousers want a slim sneaker or loafer.",
          ("chunky_sneakers", "boots", "white_sneakers", "loafers")),
-    Play("colour_echo", "accessory", "Echo a colour from the print",
+    Play("colour_echo", "colour", "Echo a colour from the print",
          "A graphic or printed piece in the look.",
          "Repeat one colour from the print in a single accessory (cap, socks, bag or beanie) so the look feels planned.",
          ("cap", "fun_socks", "beanie", "scarf", "tote")),
 ]
+PLAYBOOK += [
+    # colour, texture and formality (docs/STYLE_GUIDE.md sections 1, 4 and 6)
+    Play("accent_pop", "colour", "One accent colour",
+         "An all-neutral look (greys, black, white, navy, denim, browns).",
+         "Add one small accent colour in a single accessory and keep everything else neutral, so the eye has one focal "
+         "point.", ("cap", "fun_socks", "scarf", "beanie", "tote")),
+    Play("bookend", "colour", "Bookend the colour",
+         "A look with a clear top colour.",
+         "Repeat the top's colour in your shoes (or a cap), with the trousers in between: it makes the colours look "
+         "chosen.", ("white_sneakers", "chunky_sneakers", "boots", "loafers", "cap", "white_socks")),
+    Play("light_break", "colour", "A light break",
+         "Head-to-toe dark: black, charcoal, navy, dark brown.",
+         "Add one light note (a white tee hem, white socks or clean white sneakers) so the dark doesn't go flat.",
+         ("white_tee", "long_tee", "white_socks", "white_sneakers")),
+    Play("texture_contrast", "colour", "Contrast the textures",
+         "Tonal looks, close colours, or everything matte and soft.",
+         "Bring in a contrasting finish (smooth leather against knit, a chunky knit against smooth cotton) so a narrow "
+         "palette still has depth.", ("belt_black", "belt_brown", "scarf", "beanie", "watch")),
+    Play("high_low", "accessory", "One polished piece",
+         "A very casual base (sweatshirt, hoodie, track pants) on a day with plans, or a smart look on a relaxed day.",
+         "Pair the casual pieces with one polished one (a watch, a fine chain or loafers), or relax a smart look with "
+         "sneakers.", ("watch", "silver_chain", "gold_chain", "loafers", "white_sneakers")),
+]
 PLAYS = {p.id: p for p in PLAYBOOK}
+
+
+# "Got one?": core pieces (docs/STYLE_GUIDE.md section 8) the closet has none of. They are most likely sitting in a
+# drawer unscanned, so the prompt asks the user to scan theirs in, never to buy one.
+@dataclass(frozen=True)
+class Recall:
+    id: str
+    category: str
+    keywords: tuple[str, ...]  # an owned item matches if its subtype contains any; empty = any item of the category
+    name: str
+    lift: str  # what it would do for a look, for the fallback wording
+    when: str = "any"  # any | cold | smart
+
+
+RECALLS: list[Recall] = [
+    Recall("rec_jacket", "outerwear", (), "a jacket or coat", "frame the outfit and keep you warm", "cold"),
+    Recall("rec_knit", "top", ("sweater", "knit", "cardigan", "jumper"), "a knit sweater or cardigan",
+           "add a soft mid layer over your tees"),
+    Recall("rec_shirt", "top", ("button", "oxford", "flannel", "dress shirt", "overshirt"), "a button-up shirt",
+           "smarten this up for your plans", "smart"),
+    Recall("rec_trousers", "bottom", ("trouser", "chino", "slack"), "a pair of tailored trousers or chinos",
+           "give you a smarter bottom option", "smart"),
+    Recall("rec_jeans", "bottom", ("jean", "denim"), "a pair of jeans", "give you an easy everyday bottom"),
+    Recall("rec_overshirt", "outerwear", ("overshirt", "shacket", "shirt jacket", "chore"), "an overshirt",
+           "work as a light layer over this"),
+]
+RECALL_BY_ID = {r.id: r for r in RECALLS}
+
+
+def recall_for(closet: list[dict], cold: bool, smart: bool, skip: set[str], look_index: int = 0) -> Recall | None:
+    """A core piece the closet has none of, suited to today's weather and plans. Each look of the day asks
+    about a different one (most useful first), so the three looks don't all ask for the same jacket."""
+    def owns(r: Recall) -> bool:
+        return any(i["tags"]["category"] == r.category and (not r.keywords or any(k in i["tags"]["subtype"].lower()
+                                                                                  for k in r.keywords)) for i in closet)
+    fits = [r for r in RECALLS if r.id not in skip and not owns(r)
+            and (r.when == "any" or (r.when == "cold" and cold) or (r.when == "smart" and smart))]
+    return fits[look_index % len(fits)] if fits else None
 PRINCIPLES = (
     "Styling principles: balance volume (one relaxed piece with one fitted or cropped one); a top that's about a third "
     "of the look and trousers two-thirds reads well, and a front tuck gets you there. Underlayers should only just show. "
     "Accessories complement and never compete: at most three, one dominant metal, belt leather matching shoes. "
     "Dress for the weather (scarf and beanie only when it's cold out) and the occasion (collars, watches and belts for "
-    "smart plans; caps for casual daytime)."
+    "smart plans; caps for casual daytime). Colour: count navy, denim, browns, olive and greys as neutrals; an all-neutral "
+    "look wants one small accent; a print's colour can be echoed once; head-to-toe dark wants a light break; a tonal look "
+    "wants texture contrast. Pair a casual base with one polished piece."
 )
 
 
@@ -158,12 +221,15 @@ VOICE = (
     "as one short instruction under 18 words that names the actual pieces in this look, e.g. 'Let a white tee peek 2 cm "
     "below the cropped sweatshirt.' Write 'why' in under 14 words, in everyday words: never quote the playbook or its "
     "rules (no 'one-third to two-thirds'). 'item' is the basic you'd use, in plain words, or empty for a technique. "
-    "No emoji."
+    "Make one of the 3 a colour play that follows the measured colour read when it fits. "
+    "If a 'Got one?' piece is given, write 'recall' as one friendly sentence under 24 words asking if they have one "
+    "and how it would lift this look, ending with 'Scan it in.'; otherwise leave 'recall' empty. No emoji."
 )
 
 
 def touches_with_agent(items: list[dict], weather_note: str, plans_note: str, owned: set[str], skip: set[str],
-                       provider: str, elsewhere: set[str] = frozenset()) -> tuple[TouchSet, dict]:
+                       provider: str, elsewhere: set[str] = frozenset(), colour_line: str = "",
+                       recall: Recall | None = None) -> tuple[TouchSet, dict]:
     client = config.client_for(provider)
     model = config.PLAN_MODEL[provider]
     t0 = time.time()
@@ -172,7 +238,10 @@ def touches_with_agent(items: list[dict], weather_note: str, plans_note: str, ow
         skip_line += f" Already suggested for today's other looks, so pick different ones: {', '.join(sorted(elsewhere))}."
     system = (f"{PERSONA}\n\nYou add finishing touches to an outfit the user is about to wear, using a stylist's "
               f"playbook.\n\n{PRINCIPLES}\n\nPlaybook:\n{playbook_lines(owned)}\n\n{skip_line}")
-    user = (f"Today's look:\n{look_lines(items)}\n\nWeather: {weather_note}\nPlans: {plans_note}\n\n{VOICE}")
+    recall_line = (f"'Got one?' piece: {recall.name}. The closet has none scanned; it would {recall.lift}."
+                   if recall else "'Got one?' piece: none.")
+    user = (f"Today's look:\n{look_lines(items)}\n\n{colour_line}\nWeather: {weather_note}\nPlans: {plans_note}\n"
+            f"{recall_line}\n\n{VOICE}")
     resp = client.chat.completions.parse(
         model=model, messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
         response_format=TouchSet, reasoning_effort="low", max_tokens=3000,
@@ -184,12 +253,12 @@ def touches_with_agent(items: list[dict], weather_note: str, plans_note: str, ow
     }
 
 
-MAX_PER_KIND = {"underlayer": 1, "technique": 1, "accessory": 2}
+MAX_PER_KIND = {"underlayer": 1, "technique": 1, "accessory": 2, "colour": 1}
 
 
 def clean(touches: TouchSet, owned: set[str], skip: set[str]) -> list[dict]:
-    """Drop invented or skipped plays and duplicates, keep a mix (one underlayer, one technique, two
-    accessories at most) and mark what the user owns from their checklist, not the model's say-so.
+    """Drop invented or skipped plays and duplicates, keep a mix (one underlayer, one technique, one colour
+    play, two accessories at most) and mark what the user owns from their checklist, not the model's say-so.
     Order is kept, except that once the user has ticked anything, owned touches move up."""
     out, seen, per_kind = [], set(), {k: 0 for k in MAX_PER_KIND}
     for t in touches.touches:
@@ -211,7 +280,17 @@ def clean(touches: TouchSet, owned: set[str], skip: set[str]) -> list[dict]:
 # ---------------------------------------------------------------- rules (fixture mode and fallback)
 
 
-def touches_with_rules(items: list[dict], cold: bool, smart: bool, owned: set[str], skip: set[str]) -> list[dict]:
+COLOUR_TEMPLATES = {
+    "light_break": ("Add one light note: a white tee hem, white socks or white sneakers.", "Keeps all that dark from going flat."),
+    "accent_pop": ("Add one small accent colour in a cap, socks or scarf.", "Gives the neutrals a focal point."),
+    "colour_echo": ("Repeat one colour from the print in a cap or socks.", "Makes the look feel planned."),
+    "bookend": ("Repeat the top's colour in your shoes or a cap.", "Ties the colours together."),
+    "texture_contrast": ("Add a leather belt or a contrasting knit.", "Gives a narrow palette some depth."),
+}
+
+
+def touches_with_rules(items: list[dict], cold: bool, smart: bool, owned: set[str], skip: set[str],
+                       colour_play: str | None = None) -> list[dict]:
     """A deterministic pick from the playbook by the look's tags, for fixture mode and failures."""
     tags = [i["tags"] for i in items]
     words = " ".join(f"{t['subtype']} {t['fit']}".lower() for t in tags)
@@ -240,8 +319,10 @@ def touches_with_rules(items: list[dict], cold: bool, smart: bool, owned: set[st
         ideas.append(("sleeve_push", "Push the sleeves to mid-forearm.", "Shows your wrists and any rings."))
     if denim and not wide:
         ideas.append(("cuff_roll", f"Cuff the {bname} once to show your shoes.", "Cleaner line at the ankle."))
-    if printed:
-        ideas.append(("colour_echo", "Pick one colour from the print and repeat it in a cap or socks.", "Makes the look feel planned."))
+    if colour_play in COLOUR_TEMPLATES:
+        ideas.append((colour_play, *COLOUR_TEMPLATES[colour_play]))
+    elif printed:
+        ideas.append(("colour_echo", *COLOUR_TEMPLATES["colour_echo"]))
     if smart:
         ideas.append(("watch", "Add a simple watch.", "A small detail that reads put-together."))
     ideas.append(("rings", f"Two or three {'silver' if cool else 'gold'} rings.", "Matches the outfit's cool tones." if cool else "Warms up the earthy colours."))

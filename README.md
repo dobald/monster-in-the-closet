@@ -174,9 +174,22 @@ Live (Muse Spark Open, 3–7s per look):
 - "Tuck front of white henley into blue wide-leg jeans."
 - "Finish the charcoal track pants with chunky black boots to balance the width."
 
+**Colour read (配色) and "Got one?" (探して).** The styling research is written up in [docs/STYLE_GUIDE.md](docs/STYLE_GUIDE.md), with sources. It covers colour theory, layering, proportion and composition, texture, pattern, high/low formality, accessories and the capsule core.
+
+- **Colour read:** each look gets one, computed from each garment's measured colour rather than its tag. Navy, denim, browns, olive and greys count as neutrals. It names the scheme (all neutral, neutral plus accent, tonal, analogous, complementary or contrasting), the light/dark contrast and the warmth.
+- **A colour move:** the read decides the look's one colour play:
+  - a light break for head-to-toe dark
+  - one accent colour for all-neutral looks
+  - echoing a print's colour
+  - bookending an accent with the shoes
+  - texture contrast for tonal looks
+
+  Live on the test closet, a black sweatshirt with dark brown knit pants read "tonal, low contrast", and Spark Open suggested "Let a white tee peek just below the black sweatshirt above the dark brown pants".
+- **"Got one?":** each look also asks about one core piece the closet has none of, such as a jacket on a cold day, a knit, a button-up for smart plans, or trousers. The three looks rotate through different pieces. **Scan it in** opens Scan. **I don't have one** stops that prompt and points to Thrift. It never asks you to buy anything.
+
 | Endpoint | What it does |
 |---|---|
-| `GET /api/plans/{id}/touches?look=` | 2–3 finishing touches for one look, owned basics marked |
+| `GET /api/plans/{id}/touches?look=` | 2–3 finishing touches for one look, owned basics marked, plus its colour read and a "Got one?" prompt |
 | `GET` / `PUT /api/style` | The basics checklist (with its catalog) and touches you skipped |
 
 Plans are cached under a hash of everything they depend on: wardrobe and wear state, preferences, weather, calendar, notes and day. Asking twice is free, and wearing an outfit or learning a preference naturally produces a new plan.

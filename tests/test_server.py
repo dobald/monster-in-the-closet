@@ -382,6 +382,13 @@ def test_touches(var_dir: Path, run_dir: Path) -> None:
         r = c.get(f"/api/plans/{plan['id']}/touches", params={"look": 0}).json()
         ts = r["touches"]
         assert r["source"] == "rules" and 1 <= len(ts) <= 3, r
+        assert r["colour"]["summary"] and len(r["colour"]["palette"]) == len(plan["looks"][0]["item_ids"]), r["colour"]
+        assert sum(t["kind"] == "colour" for t in ts) <= 1
+        assert r["recall"] and "scan it in" in r["recall"]["text"].lower(), r["recall"]
+        c.put("/api/style", json={"skip": [r["recall"]["id"]]})
+        r2 = c.get(f"/api/plans/{plan['id']}/touches", params={"look": 0}).json()
+        assert (r2["recall"] or {}).get("id") != r["recall"]["id"], "'I don't have one' stops that prompt"
+        c.put("/api/style", json={"skip": []})
         assert all(t["play"] in styling.PLAYS for t in ts)
         kinds = [t["kind"] for t in ts]
         assert kinds.count("underlayer") <= 1 and kinds.count("technique") <= 1 and kinds.count("accessory") <= 2, kinds
@@ -411,6 +418,35 @@ def test_touches(var_dir: Path, run_dir: Path) -> None:
     out = styling.clean(picked, owned={"silver_rings"}, skip=set())
     assert [t["play"] for t in out] == ["rings", "watch", "hem_peek"], out
     assert out[0]["owned"] and out[0]["owned_label"] == "Silver rings" and not out[1]["owned"]
+
+
+def test_colour_and_recall(var_dir: Path) -> None:
+    """The colour read classifies measured colours; "Got one?" asks for core pieces the closet has none of."""
+    from closet import colour, styling
+    var_dir.mkdir(parents=True, exist_ok=True)
+
+    def item(iid: str, rgb: tuple[int, int, int], name: str, cat: str = "top", pattern: str = "solid", subtype: str = "tee") -> dict:
+        cutout_png(rgb).save(var_dir / f"{iid}.png")
+        return {"id": iid, "tags": {**GARMENT, "primary_color": name, "category": cat, "pattern": pattern, "subtype": subtype}}
+
+    dark = colour.read([item("d1", (20, 20, 22), "black"), item("d2", (40, 30, 32), "dark brown", "bottom")], var_dir)
+    assert dark["idea_play"] == "light_break" and dark["contrast"] == "low", dark
+    neutral = colour.read([item("n1", (225, 222, 215), "white"), item("n2", (60, 67, 78), "blue", "bottom")], var_dir)
+    assert neutral["scheme"] == "all neutral" and neutral["contrast"] == "high" and neutral["idea_play"] == "accent_pop", neutral
+    printed = colour.read([item("p1", (200, 200, 195), "white", pattern="graphic"), item("p2", (70, 70, 67), "charcoal", "bottom")], var_dir)
+    assert printed["idea_play"] == "colour_echo", printed
+    clash = colour.read([item("c1", (200, 40, 40), "red"), item("c2", (40, 160, 170), "teal", "bottom")], var_dir)
+    assert clash["scheme"] == "complementary" and not any(p["neutral"] for p in clash["palette"]), clash
+    accent = colour.read([item("a1", (200, 60, 40), "rust"), item("a2", (30, 30, 30), "black", "bottom")], var_dir)
+    assert accent["scheme"] == "neutral + accent" and accent["idea_play"] == "bookend", accent
+
+    closet = [{"id": "x", "tags": {**GARMENT, "category": "top", "subtype": "henley t-shirt"}},
+              {"id": "y", "tags": {**GARMENT, "category": "bottom", "subtype": "wide-leg jeans"}}]
+    assert styling.recall_for(closet, cold=True, smart=False, skip=set()).id == "rec_jacket"
+    assert styling.recall_for(closet, cold=False, smart=False, skip=set()).id == "rec_knit", "no jacket prompt on a warm day"
+    assert styling.recall_for(closet, cold=True, smart=False, skip={"rec_jacket"}).id == "rec_knit"
+    assert styling.recall_for(closet, cold=True, smart=True, skip=set(), look_index=1).id != "rec_jacket", "looks rotate"
+    assert all(r.id != "rec_jeans" for r in [styling.recall_for(closet, True, True, set(), n) for n in range(6)]), "owns jeans"
 
 
 def test_cut_layer() -> None:
@@ -559,12 +595,13 @@ def main_() -> None:
         test_plan_wear_checkin(tmp / "plan", run_dir)
         test_getting_started(tmp / "start", run_dir)
         test_touches(tmp / "touches", run_dir)
+        test_colour_and_recall(tmp / "colour")
         test_validate_plan()
         test_gap_math()
         test_cut_layer()
         test_agent_loop_and_repair()
         test_duplicates(tmp / "dupes")
-        print("OK: fixture mode, seeding, tag fixes, caching, dedupe, planning, wear, check-ins, the agent loop, gap finder, try-on, layered try-on, getting started, finishing touches "
+        print("OK: fixture mode, seeding, tag fixes, caching, dedupe, planning, wear, check-ins, the agent loop, gap finder, try-on, layered try-on, getting started, finishing touches, colour reads "
               "and cross-photo duplicates all behave.")
     finally:
         shutil.rmtree(run_dir, ignore_errors=True)
