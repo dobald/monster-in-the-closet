@@ -140,6 +140,19 @@ class CheckinLearning(BaseModel):
     applies_when: str | None = Field(description="Short condition, e.g. 'evenings below 8°C', or null if always.")
 
 
+class Touch(BaseModel):
+    """One finishing touch for a look, from the styling playbook (closet/styling.py)."""
+
+    playbook_id: str = Field(description="An id from the playbook, exactly as given.")
+    item: str = Field(description="The basic you'd use in plain words, e.g. 'white tee'; empty for a technique.")
+    suggestion: str = Field(description="One short instruction naming the actual pieces in the look.")
+    why: str = Field(description="The styling reason, in a few words.")
+
+
+class TouchSet(BaseModel):
+    touches: list[Touch] = Field(description="3 finishing touches, best first.")
+
+
 GapCategory = Literal["top", "bottom", "dress", "outerwear"]
 
 

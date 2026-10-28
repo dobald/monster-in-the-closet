@@ -13,7 +13,7 @@ import json
 import uuid
 from datetime import date, datetime, timedelta, timezone
 
-from closet import config, gaps, planner, tools
+from closet import config, gaps, planner, styling, tools
 from closet.schema import CheckinLearning, OutfitPlan
 
 from .cache import Cache, sha256
@@ -22,6 +22,8 @@ from .store import Store, now
 
 PLAN_VERSION = "plan1"
 GAP_VERSION = "gaps1"
+TOUCH_VERSION = "touch2"
+COLD_C = 8  # feels-like at or below this is "cold" for scarves, beanies and long-sleeve layers
 ALIVE_WINDOW_DAYS = 30
 RESCUE_DAYS = 30
 
@@ -36,6 +38,7 @@ CANNED_WEATHER = {"date": None, "location": None, "parts": {
 class Planning:
     def __init__(self, settings: Settings, cache: Cache, store: Store):
         self.settings, self.cache, self.store = settings, cache, store
+        self._given: dict[str, dict[int, list[dict]]] = {}  # plan id -> look -> touches shown this session
 
     # -- inputs
 
@@ -276,6 +279,73 @@ class Planning:
         if source == "agent":
             self.cache.put("gaps", key, record)
         return record
+
+
+    # -- finishing touches (closet/styling.py)
+
+    def style(self) -> dict:
+        """The user's basics checklist (things they own but don't scan) and touches they said aren't them."""
+        return {"basics": [], "skip": [], **(self.store.get_setting("style") or {})}
+
+    def update_style(self, basics: list[str] | None, skip: list[str] | None) -> dict:
+        st = self.style()
+        if basics is not None:
+            st["basics"] = sorted(set(b for b in basics if b in styling.BASIC_LABELS))
+        if skip is not None:
+            st["skip"] = sorted(set(x for x in skip if x in styling.PLAYS))
+        self.store.put_setting("style", st)
+        return st
+
+    async def touches(self, plan_id: str, look_index: int) -> dict:
+        record = self.store.get_plan(plan_id=plan_id)
+        if not record:
+            raise KeyError("No such plan.")
+        looks = record["plan"]["looks"]
+        if not 0 <= look_index < len(looks):
+            raise IndexError(f"look must be 0-{len(looks) - 1}")
+        items = [i for i in (self.store.get_item(x) for x in looks[look_index]["item_ids"]) if i and i["tags"]]
+        st = self.style()
+        owned, skip = set(st["basics"]), set(st["skip"])
+
+        parts = (record["weather"].get("parts") or {}).values()
+        coldest = min((p["feels_like_low_c"] for p in parts), default=15)
+        cold = coldest <= COLD_C
+        events = record["calendar"].get("events", [])
+        smart = any(e.get("dress_code") for e in events) or any(i["tags"]["formality"] in ("smart_casual", "business", "formal") for i in items)
+        weather_note = f"feels like {coldest}°C at the coldest" + (" (cold: layers and warm accessories welcome)" if cold else "")
+        plans_note = ", ".join(f"{e['start']} {e['title']}" + (f" ({e['dress_code']})" if e.get("dress_code") else "") for e in events) or "No plans"
+
+        # Touches already given for this plan's earlier looks, so each look gets its own ideas. Earlier only:
+        # look 0 stays stable however the user browses, and its cache entry keeps working.
+        elsewhere = {t["play"] for n, ts in (self._given.get(plan_id) or {}).items() if n < look_index for t in ts}
+        key = sha256((TOUCH_VERSION + config.PLAN_PROVIDER + styling.cache_parts(items, owned, skip, weather_note, plans_note)
+                      + ",".join(sorted(elsewhere))).encode())
+        hit = self.cache.get("touches", key)
+        if hit:
+            self._given.setdefault(plan_id, {})[look_index] = hit["touches"]
+            return {**hit, "trace": {**hit["trace"], "cached": True}}
+
+        touches, trace, source = [], {"failures": []}, "rules"
+        if self.settings.live:
+            for provider in [config.PLAN_PROVIDER] + [p for p in ("meta",) if p != config.PLAN_PROVIDER]:
+                try:
+                    picked, t = await asyncio.to_thread(styling.touches_with_agent, items, weather_note, plans_note,
+                                                        owned, skip, provider, elsewhere)
+                    touches = styling.clean(picked, owned, skip)
+                    if touches:
+                        trace, source = {**t, "failures": trace["failures"]}, "agent"
+                        break
+                    trace["failures"].append(f"{provider}: no usable touches")
+                except Exception as e:
+                    trace["failures"].append(f"{provider}: {type(e).__name__}: {e}"[:300])
+        if not touches:
+            touches = styling.touches_with_rules(items, cold, smart, owned, skip)
+            trace = {**trace, "provider": "rules"}
+        out = {"plan_id": plan_id, "look": look_index, "touches": touches, "source": source, "trace": trace}
+        if source == "agent":
+            self.cache.put("touches", key, out)
+        self._given.setdefault(plan_id, {})[look_index] = touches
+        return out
 
 
 def today_local() -> date:

@@ -155,6 +155,30 @@ These answers are estimates. They never count as wears, a logged "Wear this" alw
 |---|---|
 | `POST /api/wardrobe/last-worn` | `{items: [{id, days_ago}]}`: estimated last-worn dates; `days_ago: null` clears an estimate |
 
+**Finishing touches (仕上げ).** Each look gets 2–3 small moves that make it read as styled: an underlayer that just shows, a tuck or pushed sleeves, and an accessory or two. They come from a styling playbook in `closet/styling.py`, distilled from stylist and editorial guides:
+- **Layers only peek:** a hem a couple of centimetres below a knit, a collar out over a crewneck, long sleeves under a graphic tee, a turtleneck under a layer.
+- **Balance volume:** pair one relaxed piece with one fitted one, using a front tuck to show the waist over wide trousers.
+- **Sleeves and hems:** push sleeves to show wrists and rings; cuff jeans to show the shoes.
+- **Accessories:** three at most, one main metal (silver with cool colours, gold with warm), belt leather matching the shoes, one accessory echoing a colour from a print, and shoe weight matched to trouser volume.
+
+How it works:
+1. **Muse Spark Open picks from the playbook** for the actual pieces, the weather and the plans, and writes each touch in plain words.
+2. **The code checks the picks:** playbook ids only, at most one layer, one technique and two accessories, and no repeats of an earlier look's ideas.
+3. **The code works out what you own** from your checklist in Notes ("Things you own but don't scan": tees, shirts, jewellery, belts, socks, shoes). Anything you haven't ticked shows as "if you have one". It's never a shopping link.
+4. **The oni learns from your taps:** "I have this" ticks the basic, and "Not me" stops that touch.
+
+Fixture mode uses a rule-based version of the same playbook.
+
+Live (Muse Spark Open, 3–7s per look):
+- "Wear a white button-up under the black crewneck so the collar peeks out."
+- "Tuck front of white henley into blue wide-leg jeans."
+- "Finish the charcoal track pants with chunky black boots to balance the width."
+
+| Endpoint | What it does |
+|---|---|
+| `GET /api/plans/{id}/touches?look=` | 2–3 finishing touches for one look, owned basics marked |
+| `GET` / `PUT /api/style` | The basics checklist (with its catalog) and touches you skipped |
+
 Plans are cached under a hash of everything they depend on: wardrobe and wear state, preferences, weather, calendar, notes and day. Asking twice is free, and wearing an outfit or learning a preference naturally produces a new plan.
 
 **Live run (11-garment closet, Toronto, feels like −2° in the morning, a smart-casual crit and a patio dinner):**

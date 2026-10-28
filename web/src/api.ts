@@ -82,6 +82,30 @@ export interface Plan {
   looks: Look[];
 }
 
+export interface Touch {
+  play: string;
+  kind: "underlayer" | "accessory" | "technique";
+  name: string;
+  item: string;
+  suggestion: string;
+  why: string;
+  needs: string[]; // basics keys, any one will do; empty for a technique
+  owned: boolean;
+  owned_label: string | null;
+}
+
+export interface Touches {
+  touches: Touch[];
+  source: "agent" | "rules";
+  trace: { provider?: string; model?: string; seconds?: number; cached?: boolean };
+}
+
+export interface Style {
+  basics: string[];
+  skip: string[];
+  catalog: { group: string; items: { key: string; label: string }[] }[];
+}
+
 export interface TraceStep {
   kind: "context" | "model" | "tool" | "check" | "repair" | "rules" | "done";
   label: string;
@@ -335,6 +359,9 @@ export const api = {
     call<LayersStatus>("/api/tryon/layers", json("POST", { item_ids: itemIds, prepare })),
   flatlay: (planId: string, look: number) =>
     call<{ url: string }>(`/api/tryon/flatlay?plan_id=${encodeURIComponent(planId)}&look=${look}`),
+  touches: (planId: string, look: number) => call<Touches>(`/api/plans/${planId}/touches?look=${look}`),
+  style: () => call<Style>("/api/style"),
+  updateStyle: (changes: { basics?: string[]; skip?: string[] }) => call<Style>("/api/style", json("PUT", changes)),
   gaps: (fresh = false) => call<Gaps>("/api/gaps", json("POST", { fresh })),
   thrift: () => call<ThriftEntry[]>("/api/thrift"),
   thriftExample: (p: GapPiece) =>

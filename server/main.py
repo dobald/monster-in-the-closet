@@ -658,6 +658,37 @@ def add_preference(body: PreferenceIn) -> dict:
     return {"new": app.state.store.add_preference(text, body.applies_when, None)}
 
 
+class StyleIn(BaseModel):
+    basics: list[str] | None = None  # keys from GET /api/style catalog
+    skip: list[str] | None = None  # playbook ids the user said aren't their style
+
+
+@app.get("/api/style")
+def get_style() -> dict:
+    """The basics checklist (with its catalog) and skipped touches."""
+    from closet import styling
+    return {**app.state.planning.style(),
+            "catalog": [{"group": g, "items": [{"key": k, "label": label} for k, label in items]} for g, items in styling.BASICS.items()]}
+
+
+@app.put("/api/style")
+def put_style(body: StyleIn) -> dict:
+    app.state.planning.update_style(body.basics, body.skip)
+    return get_style()
+
+
+@app.get("/api/plans/{plan_id}/touches")
+async def look_touches(plan_id: str, look: int = 0) -> dict:
+    """Finishing touches for one look: underlayers, accessories and small techniques from the styling
+    playbook, using basics the user owns first. Never a shopping suggestion."""
+    try:
+        return await app.state.planning.touches(plan_id, look)
+    except KeyError as e:
+        raise HTTPException(404, str(e).strip("'\""))
+    except IndexError as e:
+        raise HTTPException(422, str(e))
+
+
 @app.get("/api/oni")
 def oni(day: date | None = None) -> dict:
     """The oni's mood and the closet-alive meter, for the Today header."""

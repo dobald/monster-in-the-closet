@@ -372,6 +372,47 @@ def test_getting_started(var_dir: Path, run_dir: Path) -> None:
         assert c.post("/api/wardrobe/last-worn", json={"items": [{"id": "nope", "days_ago": 3}]}).status_code == 404
 
 
+def test_touches(var_dir: Path, run_dir: Path) -> None:
+    """Finishing touches: playbook-only picks, a mix of kinds, owned basics from the user's checklist."""
+    from closet import styling
+    from closet.schema import TouchSet
+    with client_for("fixture", var_dir) as c:
+        c.post("/api/dev/seed", json={"run": str(run_dir.relative_to(config.ROOT))})
+        plan = c.post("/api/plan", json={}).json()
+        r = c.get(f"/api/plans/{plan['id']}/touches", params={"look": 0}).json()
+        ts = r["touches"]
+        assert r["source"] == "rules" and 1 <= len(ts) <= 3, r
+        assert all(t["play"] in styling.PLAYS for t in ts)
+        kinds = [t["kind"] for t in ts]
+        assert kinds.count("underlayer") <= 1 and kinds.count("technique") <= 1 and kinds.count("accessory") <= 2, kinds
+        assert all(t["owned"] == (not t["needs"]) for t in ts), "nothing ticked yet: only techniques count as owned"
+        assert c.get(f"/api/plans/{plan['id']}/touches", params={"look": 9}).status_code == 422
+        assert c.get("/api/plans/nope/touches").status_code == 404
+
+        st = c.put("/api/style", json={"basics": ["white_tee", "button_up", "silver_rings", "made_up"]}).json()
+        assert st["basics"] == ["button_up", "silver_rings", "white_tee"] and st["catalog"][0]["group"] == "Underlayers", st
+        ts = c.get(f"/api/plans/{plan['id']}/touches", params={"look": 0}).json()["touches"]
+        # The demo calendar has a smart-casual crit, so the rules put a collar under the crewneck.
+        layer = next(t for t in ts if t["kind"] == "underlayer")
+        assert layer["owned"] and layer["owned_label"] in ("Button-up shirt", "Plain white tee"), ts
+        first_play = ts[0]["play"]
+        c.put("/api/style", json={"skip": [first_play, "not_a_play"]})
+        assert c.get("/api/style").json()["skip"] == [first_play]
+        assert first_play not in [t["play"] for t in c.get(f"/api/plans/{plan['id']}/touches", params={"look": 0}).json()["touches"]]
+
+    # clean(): invented plays dropped, one underlayer at most, owned first once anything is ticked.
+    picked = TouchSet(touches=[
+        {"playbook_id": "made_up", "item": "", "suggestion": "x", "why": "y"},
+        {"playbook_id": "watch", "item": "watch", "suggestion": "Add a watch.", "why": "Polished."},
+        {"playbook_id": "hem_peek", "item": "white tee", "suggestion": "Tee peeks out.", "why": "Clean line."},
+        {"playbook_id": "collar_peek", "item": "shirt", "suggestion": "Collar out.", "why": "Smart."},
+        {"playbook_id": "rings", "item": "rings", "suggestion": "Silver rings.", "why": "Cool tones."},
+    ])
+    out = styling.clean(picked, owned={"silver_rings"}, skip=set())
+    assert [t["play"] for t in out] == ["rings", "watch", "hem_peek"], out
+    assert out[0]["owned"] and out[0]["owned_label"] == "Silver rings" and not out[1]["owned"]
+
+
 def test_cut_layer() -> None:
     """A layer is cropped to its garment, and its box says where it sits on the base."""
     import numpy as np
@@ -517,12 +558,13 @@ def main_() -> None:
         test_live_mode_caches(tmp / "live")
         test_plan_wear_checkin(tmp / "plan", run_dir)
         test_getting_started(tmp / "start", run_dir)
+        test_touches(tmp / "touches", run_dir)
         test_validate_plan()
         test_gap_math()
         test_cut_layer()
         test_agent_loop_and_repair()
         test_duplicates(tmp / "dupes")
-        print("OK: fixture mode, seeding, tag fixes, caching, dedupe, planning, wear, check-ins, the agent loop, gap finder, try-on, layered try-on, getting started "
+        print("OK: fixture mode, seeding, tag fixes, caching, dedupe, planning, wear, check-ins, the agent loop, gap finder, try-on, layered try-on, getting started, finishing touches "
               "and cross-photo duplicates all behave.")
     finally:
         shutil.rmtree(run_dir, ignore_errors=True)

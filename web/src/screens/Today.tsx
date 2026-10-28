@@ -3,6 +3,7 @@ import { api, ApiError, idleDays, shortName, type Item, type Plan, type WeatherP
 import type { AppCtx } from "../App";
 import Oni, { MOOD_LABEL } from "../Oni";
 import TraceSheet from "./Trace";
+import Touches from "./Touches";
 
 const WEEKDAY_JA = ["日曜日", "月曜日", "火曜日", "水曜日", "木曜日", "金曜日", "土曜日"];
 const LOOK_LETTERS = ["A", "B", "C"];
@@ -194,6 +195,7 @@ export default function Today({ ctx }: { ctx: AppCtx }) {
                 <Collage key={plan!.id + lookIndex} items={look.items} onOpen={ctx.openItem} onTryOn={() => ctx.openTryOn(plan!, lookIndex)} />
                 <h2 className="display" style={{ fontSize: 22, lineHeight: 1.05 }}>{look.name}</h2>
                 <p style={{ margin: 0, fontSize: 14, lineHeight: 1.55 }}>{look.why}</p>
+                <Touches plan={plan!} lookIndex={lookIndex} ctx={ctx} />
               </>
             )}
 

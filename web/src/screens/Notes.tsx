@@ -4,6 +4,7 @@ import type { AppCtx } from "../App";
 import Oni, { MOOD_LABEL } from "../Oni";
 import { getTheme, setTheme, type Theme } from "../theme";
 import { AliveBar } from "./Today";
+import { BasicsChecklist } from "./Touches";
 
 // The oni's notebook: its mood, the closet-alive meter, try-on settings, and every preference
 // it has learned from check-ins, each one forgettable.
@@ -144,6 +145,8 @@ export default function Notes({ ctx }: { ctx: AppCtx }) {
           ))}
         </div>
       </section>
+
+      <BasicsChecklist ctx={ctx} />
 
       <section aria-label="Learned preferences" style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 4 }}>
         <span className="label">LEARNED FROM YOUR CHECK-INS</span>
