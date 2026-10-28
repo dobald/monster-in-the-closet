@@ -70,8 +70,8 @@ export default function Scan({ ctx }: { ctx: AppCtx }) {
           border: "var(--line)",
           borderRadius: 12,
           overflow: "hidden",
-          backgroundColor: "#CFC6B8",
-          backgroundImage: "radial-gradient(#9A8F80 1px, transparent 1.6px)",
+          backgroundColor: "var(--cam)",
+          backgroundImage: "radial-gradient(var(--cam-dot) 1px, transparent 1.6px)",
           backgroundSize: "6px 6px",
         }}
       >

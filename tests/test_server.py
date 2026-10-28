@@ -169,6 +169,18 @@ def test_plan_wear_checkin(var_dir: Path, run_dir: Path) -> None:
         assert gaps["source"] == "rules" and gaps["pieces"], gaps
         coat = gaps["pieces"][0]
         assert coat["category"] == "outerwear" and coat["outfits_unlocked"] == 1 and len(coat["pairs"]) == 2, coat
+        # Example photos: fixture mode never generates; an existing one rides along with the piece.
+        ex = c.post("/api/thrift/example", json={"name": coat["name"], "colors": coat["colors"], "category": coat["category"]}).json()
+        assert ex["url"] is None and "live mode" in ex["reason"], ex
+        examples = main.app.state.examples
+        Image.new("RGB", (30, 20), "olive").save(examples.dir / f"{examples.key(coat)}.jpg")
+        coat = c.post("/api/gaps").json()["pieces"][0]
+        assert coat["example_url"] and c.get(coat["example_url"]).status_code == 200, coat
+        assert c.get("/api/examples/..%2Fwardrobe.jpg").status_code == 404
+        from server.examples import example_prompt
+        prompt = example_prompt({"name": "Camel wool overcoat", "colors": ["camel"], "category": "outerwear"})
+        assert "camel camel" not in prompt.lower() and "no logos" in prompt and "second-hand" in prompt, prompt
+
         tid = c.post("/api/thrift", json={"piece": coat}).json()["id"]
         assert c.post("/api/thrift", json={"piece": coat}).json()["id"] == tid, "re-adding updates, no duplicate"
         listed = c.get("/api/thrift").json()

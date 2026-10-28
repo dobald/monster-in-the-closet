@@ -35,6 +35,18 @@ export default function Thrift({ ctx }: { ctx: AppCtx }) {
   const [state, setState] = useState<"loading" | "ready" | "empty" | "error">("loading");
   const [error, setError] = useState("");
 
+  // Example photos load after the cards: each is one Muse Image call (~25s) the first time.
+  const [examples, setExamples] = useState<Record<string, string | null | "loading">>({});
+  const fetchExamples = (pieces: GapPiece[]) => {
+    for (const p of pieces) {
+      if (p.example_url) continue;
+      setExamples((e) => ({ ...e, [p.name]: "loading" }));
+      api.thriftExample(p)
+        .then((r) => setExamples((e) => ({ ...e, [p.name]: r.url })))
+        .catch(() => setExamples((e) => ({ ...e, [p.name]: null })));
+    }
+  };
+
   const load = async (fresh = false) => {
     setState("loading");
     try {
@@ -42,6 +54,7 @@ export default function Thrift({ ctx }: { ctx: AppCtx }) {
       setGaps(g);
       setList(l);
       setState("ready");
+      fetchExamples(g.pieces);
     } catch (e) {
       if (e instanceof ApiError && e.status === 409) setState("empty");
       else {
@@ -56,8 +69,11 @@ export default function Thrift({ ctx }: { ctx: AppCtx }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ctx.wardrobeVersion]);
 
+  const exampleFor = (p: GapPiece): string | null | "loading" => p.example_url ?? examples[p.name] ?? null;
+
   const watch = async (p: GapPiece) => {
-    await api.addThrift(p).catch((e) => ctx.toast((e as Error).message));
+    const ex = exampleFor(p);
+    await api.addThrift({ ...p, example_url: ex === "loading" ? null : ex }).catch((e) => ctx.toast((e as Error).message));
     setList(await api.thrift());
     ctx.toast(`${p.name} is on your thrift list.`);
   };
@@ -152,6 +168,7 @@ export default function Thrift({ ctx }: { ctx: AppCtx }) {
               onList={watching.has(p.name.toLowerCase())}
               onWatch={() => watch(p)}
               onDismiss={() => dismiss(p)}
+              example={exampleFor(p)}
               ctx={ctx}
             />
           ))}
@@ -186,12 +203,31 @@ export default function Thrift({ ctx }: { ctx: AppCtx }) {
   );
 }
 
-function GapCard({ piece: p, index, onList, onWatch, onDismiss, ctx }: {
-  piece: GapPiece; index: number; onList: boolean; onWatch: () => void; onDismiss: () => void; ctx: AppCtx;
+function GapCard({ piece: p, index, onList, onWatch, onDismiss, example, ctx }: {
+  piece: GapPiece; index: number; onList: boolean; onWatch: () => void; onDismiss: () => void;
+  example: string | null | "loading"; ctx: AppCtx;
 }) {
   const q = p.search_terms[0] ?? p.name;
   return (
     <article className="card" style={{ position: "relative", padding: 12, display: "flex", flexDirection: "column", gap: 10, animation: `rise .4s ease-out ${index * 0.08}s both` }}>
+      {example && (
+        <figure
+          className="halftone"
+          style={{ position: "relative", margin: "-2px -2px 0", border: "var(--line)", borderRadius: 8, overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center", ...(example === "loading" ? { aspectRatio: "3 / 2" } : {}) }}
+        >
+          {example === "loading" ? (
+            <span style={{ background: "var(--washi)", border: "var(--line)", borderRadius: 6, padding: "4px 10px", fontWeight: 700, fontSize: 13 }}>
+              <span className="spinner-dots">Sketching an example</span>
+            </span>
+          ) : (
+            // Tops come back landscape, trousers portrait: let the photo set the frame, capped in height.
+            <img src={example} alt={`Example of a ${p.name.toLowerCase()}`} style={{ width: "100%", maxHeight: 340, objectFit: "cover", animation: "fade .3s ease-out both" }} />
+          )}
+          <figcaption className="label" style={{ position: "absolute", left: 8, bottom: 8, background: "var(--washi)", color: "var(--sumi)", border: "var(--line)", borderRadius: 4, padding: "2px 6px", fontSize: 9 }}>
+            EXAMPLE · AI-MADE · <span lang="ja">例</span>
+          </figcaption>
+        </figure>
+      )}
       <span
         aria-label={`${p.outfits_unlocked} new outfits`}
         style={{
@@ -292,11 +328,15 @@ function Wanted({ entry, tilt, onFound, onRemove, onScan }: { entry: ThriftEntry
       <span className="display" style={{ fontSize: 16, letterSpacing: "0.04em" }}>
         WANTED <span lang="ja">求む</span>
       </span>
-      <span aria-hidden="true" style={{ display: "flex" }}>
-        {p.colors.slice(0, 2).map((c, i) => (
-          <span key={c} style={{ width: 34, height: 34, borderRadius: "50%", border: "var(--line)", background: swatch(c), marginLeft: i ? -10 : 0 }} />
-        ))}
-      </span>
+      {p.example_url ? (
+        <img src={p.example_url} alt="" style={{ width: "100%", aspectRatio: "1", objectFit: "cover", border: "var(--line)", borderRadius: 6, filter: isFound ? "grayscale(.6)" : undefined }} />
+      ) : (
+        <span aria-hidden="true" style={{ display: "flex" }}>
+          {p.colors.slice(0, 2).map((c, i) => (
+            <span key={c} style={{ width: 34, height: 34, borderRadius: "50%", border: "var(--line)", background: swatch(c), marginLeft: i ? -10 : 0 }} />
+          ))}
+        </span>
+      )}
       <strong style={{ fontSize: 13, lineHeight: 1.2 }}>{entry.name}</strong>
       <span className="label" style={{ fontSize: 9 }}>+{p.outfits_unlocked} OUTFITS{p.price_range ? ` · ${p.price_range}` : ""}</span>
       {isFound ? (

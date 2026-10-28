@@ -150,6 +150,7 @@ export interface GapPiece {
   search_terms: string[];
   outfits_unlocked: number;
   pairs: Item[];
+  example_url?: string | null; // AI example photo, once made
 }
 
 export interface Gaps {
@@ -272,6 +273,8 @@ export const api = {
   tryonJob: (id: string) => call<TryOnJob>(`/api/tryon/jobs/${id}`),
   gaps: (fresh = false) => call<Gaps>("/api/gaps", json("POST", { fresh })),
   thrift: () => call<ThriftEntry[]>("/api/thrift"),
+  thriftExample: (p: GapPiece) =>
+    call<{ url: string | null; cached: boolean; reason: string | null }>("/api/thrift/example", json("POST", { name: p.name, colors: p.colors, category: p.category })),
   addThrift: (piece: GapPiece, status: "watching" | "dismissed" = "watching") =>
     call<{ id: number }>("/api/thrift", json("POST", { piece, status })),
   setThrift: (id: number, status: ThriftStatus) => call<void>(`/api/thrift/${id}`, json("PATCH", { status })),

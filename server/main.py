@@ -26,6 +26,7 @@ from .cache import Cache
 from .pipeline import FixtureMissing, Pipeline
 from .planning import Planning, today_local
 from .store import Store
+from .examples import Examples
 from .tryon import TryOn
 
 MAX_PHOTOS = 10
@@ -122,6 +123,7 @@ async def lifespan(app: FastAPI):
     app.state.pipeline = Pipeline(s, cache, store)
     app.state.planning = Planning(s, cache, store)
     app.state.tryon = TryOn(s, cache, store)
+    app.state.examples = Examples(s)
     yield
 
 
@@ -346,10 +348,32 @@ class ThriftStatusIn(BaseModel):
 
 
 def _with_pairs(piece: dict) -> dict:
-    """A gap piece with the closet items it pairs with expanded (for the 'goes with' row)."""
+    """A gap piece with the closet items it pairs with expanded (for the 'goes with' row),
+    plus its example photo if one has been made."""
     store = app.state.store
     items = [store.get_item(i) for i in piece.get("pairs_with", [])]
-    return {**piece, "pairs": [_item_out(i).model_dump() for i in items if i]}
+    return {**piece, "pairs": [_item_out(i).model_dump() for i in items if i],
+            "example_url": app.state.examples.url(piece) if piece.get("name") else None}
+
+
+class ExampleIn(BaseModel):
+    name: str
+    colors: list[str] = []
+    category: str = ""
+
+
+@app.post("/api/thrift/example")
+async def thrift_example(body: ExampleIn) -> dict:
+    """An AI example photo of a gap piece (Muse Image, ~25s the first time, then cached)."""
+    return await app.state.examples.ensure(body.model_dump())
+
+
+@app.get("/api/examples/{name}.jpg")
+def example_file(name: str) -> FileResponse:
+    path = app.state.examples.dir / f"{name}.jpg"
+    if not name.isalnum() or not path.exists():
+        raise HTTPException(404, "No such example.")
+    return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "public, max-age=31536000, immutable"})
 
 
 @app.post("/api/gaps")

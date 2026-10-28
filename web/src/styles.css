@@ -13,6 +13,11 @@
   --blush: #e8a08f;
   --ghost: #c9bfb0;
   --mist: #cfc7ba;
+  --muted: #6f665d;
+  --slot: var(--paper);          /* riso photo slots behind cutouts */
+  --slot-dot: var(--ai);
+  --cam: #cfc6b8;                /* the scan camera frame */
+  --cam-dot: #9a8f80;
 
   --display: "Dela Gothic One", "Zen Kaku Gothic New", sans-serif;
   --body: "Zen Kaku Gothic New", system-ui, sans-serif;
@@ -21,6 +26,37 @@
   --line: 1.5px solid var(--sumi);
   --tabbar-h: 80px;
   color-scheme: light;
+}
+
+/* Dark: the print inverts (washi becomes ink-dark ground, sumi becomes the light ink), so
+   pressable things keep their hard shadows and filled buttons read light-on-dark. Photo slots
+   stay a mid-tone paper so black and white garments both stay visible. Used when the system
+   asks for dark (unless the user picked light), or when the user picked dark. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --washi: #1e1b19; --washi-2: #24211e; --paper: #2c2825; --paper-3: #121110;
+    --sumi: #ede6da; --sumi-2: #d6cec2; --shu: #d9573d; --ai: #6a8db2; --blush: #eba796;
+    --ghost: #3e3934; --mist: #a39a8e; --muted: #a39a8e;
+    --slot: #a79e91; --slot-dot: #55677a; --cam: #8a8176; --cam-dot: #5f574e;
+    --line: 1.5px solid var(--sumi);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --washi: #1e1b19; --washi-2: #24211e; --paper: #2c2825; --paper-3: #121110;
+  --sumi: #ede6da; --sumi-2: #d6cec2; --shu: #d9573d; --ai: #6a8db2; --blush: #eba796;
+  --ghost: #3e3934; --mist: #a39a8e; --muted: #a39a8e;
+  --slot: #a79e91; --slot-dot: #55677a; --cam: #8a8176; --cam-dot: #5f574e;
+  --line: 1.5px solid var(--sumi);
+  color-scheme: dark;
+}
+
+/* Night surfaces (the evening check-in) are dark by design in either theme: pin their palette. */
+.night {
+  --washi: #f3eee5; --sumi: #2b2724; --sumi-2: #3a3531; --shu: #c4472f; --ai: #34506b;
+  --blush: #e8a08f; --mist: #cfc7ba; --muted: #cfc7ba;
+  --line: 1.5px solid #2b2724;
+  color-scheme: dark;
 }
 
 * { box-sizing: border-box; }
@@ -61,7 +97,7 @@ img { display: block; max-width: 100%; }
 .display { font-family: var(--display); font-weight: 400; line-height: 0.92; letter-spacing: -0.01em; margin: 0; }
 .label { font-family: var(--mono); font-size: 10px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
 .small { font-size: 12px; line-height: 1.45; }
-.muted { color: #6f665d; }
+.muted { color: var(--muted); }
 .vertical { writing-mode: vertical-rl; font-family: var(--display); line-height: 1; }
 
 /* ---- pressables */
@@ -146,8 +182,8 @@ img { display: block; max-width: 100%; }
   font-weight: 700;
 }
 .halftone {
-  background-color: var(--paper);
-  background-image: radial-gradient(var(--ai) 1px, transparent 1.6px);
+  background-color: var(--slot);
+  background-image: radial-gradient(var(--slot-dot) 1px, transparent 1.6px);
   background-size: 7px 7px;
 }
 .hanko {
@@ -233,7 +269,7 @@ img { display: block; max-width: 100%; }
   gap: 12px;
   animation: slide-up 0.28s cubic-bezier(0.2, 0.9, 0.3, 1) both;
 }
-.sheet.night { background: var(--sumi); color: var(--washi); }
+.sheet.night { background: #2b2724; color: #f3eee5; }
 .sheet.night .icon-btn { background: transparent; border-color: var(--washi); box-shadow: 2px 2px 0 var(--washi); color: var(--washi); }
 .sheet.night .chip { background: transparent; color: var(--washi); border-color: var(--washi); box-shadow: 2px 2px 0 var(--washi); }
 .sheet.night .chip[aria-pressed="true"], .sheet.night .chip[aria-checked="true"] { background: var(--washi); color: var(--sumi); box-shadow: none; }

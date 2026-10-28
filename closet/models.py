@@ -256,6 +256,28 @@ def _edit(images: list[Image.Image], prompt: str) -> tuple[Image.Image | None, s
     return None, "error: no image in response"
 
 
+def generate_image(prompt: str) -> tuple[Image.Image | None, str]:
+    """One Muse Image text-to-image call (/images/generations). Returns (image, status) like _edit."""
+    p = config.PROVIDERS["meta"]
+    r = httpx.post(p.base_url.rstrip("/") + "/images/generations",
+                   json={"model": config.IMAGE_MODEL, "prompt": prompt, "n": 1},
+                   headers={"Authorization": f"Bearer {p.api_key}"}, timeout=180)
+    if r.status_code != 200:
+        try:
+            err = r.json().get("error", r.json())
+        except ValueError:
+            err = {"message": r.text[:300]}
+        msg = err.get("message", str(err)) if isinstance(err, dict) else str(err)
+        refused = isinstance(err, dict) and err.get("code") == "content_policy_violation"
+        return None, f"{'refused' if refused else 'error'} ({r.status_code}): {msg[:300]}"
+    item = r.json()["data"][0]
+    if item.get("b64_json"):
+        return Image.open(io.BytesIO(base64.b64decode(item["b64_json"]))).convert("RGB"), "ok"
+    if item.get("url"):
+        return Image.open(io.BytesIO(httpx.get(item["url"], timeout=60).content)).convert("RGB"), "ok"
+    return None, "error: no image in response"
+
+
 def _mannequin_spec(profile: BodyProfile | None) -> str:
     """What the judge should expect from a mannequin. Height is left out on purpose: it can't be
     judged from a single studio shot, and asking for it made the old judge mark good renders 1-2/5."""

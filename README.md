@@ -171,6 +171,9 @@ Live, on the 7-garment test closet (12s, ~1k tokens in / 3.6k out): an olive woo
 | `GET /api/thrift` | The thrift list: pieces being hunted, and ones found |
 | `POST /api/thrift` | `{piece, status}`: watch a piece, or dismiss it so it's never suggested again |
 | `PATCH` / `DELETE /api/thrift/{id}` | Mark found, or remove |
+| `POST /api/thrift/example` | `{name, colors, category}`: the piece's example photo (made once, then cached) |
+
+**Example photos.** Each gap card gets an example photo made by Muse Image (text-to-image, ~25s the first time, then cached). It shows a second-hand piece in good condition, laid flat and shot from above, the same view as your own scans, so you know the shape and colour to look for. It is labelled "EXAMPLE · AI-MADE" in the app, never presented as a real listing, and the prompt rules out logos, labels and people. Fixture mode only shows examples already made.
 
 In the app, the Thrift tab shows gap cards with a "+N NEW OUTFITS" sticker, the pieces you own that it goes with, and the "what to look for" tips. Your list appears as WANTED 求む posters. "Found it!" stamps a poster 済 and sends you to Scan to add the piece to your closet.
 
@@ -230,6 +233,8 @@ Screens:
 - **Scan:** pick 1–10 flat-lay photos and build the closet.
 - **Thrift:** the gap finder and the thrift list (see above).
 - **Notes:** the oni's mood, closet-alive meter and every learned preference. Each preference can be forgotten.
+
+**Dark mode.** The app follows the system theme, or you can force Light or Dark under Notes → Appearance (remembered on the device). Dark inverts the print: ink-dark ground, light ink, the same hard shadows. Two things stay put on purpose: photo slots stay a mid-tone paper so black and white garments both stay visible, and the evening check-in keeps its night palette.
 
 In fixture mode the Today screen shows a DEMO DATA tag, and plans come from the rule picker.
 

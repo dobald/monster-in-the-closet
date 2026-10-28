@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api, type Preference, type TryOnMode, type TryOnProfile } from "../api";
 import type { AppCtx } from "../App";
 import Oni, { MOOD_LABEL } from "../Oni";
+import { getTheme, setTheme, type Theme } from "../theme";
 import { AliveBar } from "./Today";
 
 // The oni's notebook: its mood, the closet-alive meter, try-on settings, and every preference
@@ -12,6 +13,7 @@ const TRYON_LABEL: Record<TryOnMode, string> = { mannequin: "Mannequin", photo: 
 export default function Notes({ ctx }: { ctx: AppCtx }) {
   const [prefs, setPrefs] = useState<Preference[] | null>(null);
   const [tryon, setTryon] = useState<TryOnProfile | null>(null);
+  const [theme, setThemeState] = useState<Theme>(getTheme());
 
   useEffect(() => {
     api.preferences().then(setPrefs).catch(() => setPrefs([]));
@@ -83,6 +85,28 @@ export default function Notes({ ctx }: { ctx: AppCtx }) {
         </span>
         <span aria-hidden="true" style={{ fontWeight: 700 }}>Edit →</span>
       </button>
+
+      <section aria-label="Appearance" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+        <span className="label">APPEARANCE · <span lang="ja">表示</span></span>
+        <div role="radiogroup" aria-label="Appearance" style={{ display: "flex", gap: 6 }}>
+          {(["system", "light", "dark"] as Theme[]).map((t) => (
+            <button
+              key={t}
+              type="button"
+              role="radio"
+              aria-checked={theme === t}
+              className="chip press"
+              style={{ height: 30, fontSize: 12, padding: "0 10px" }}
+              onClick={() => {
+                setTheme(t);
+                setThemeState(t);
+              }}
+            >
+              {t === "system" ? "System" : t === "light" ? "Light" : "Dark"}
+            </button>
+          ))}
+        </div>
+      </section>
 
       <section aria-label="Learned preferences" style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 4 }}>
         <span className="label">LEARNED FROM YOUR CHECK-INS</span>

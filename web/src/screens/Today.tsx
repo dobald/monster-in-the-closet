@@ -248,7 +248,7 @@ export default function Today({ ctx }: { ctx: AppCtx }) {
 
       <button
         type="button"
-        className="press"
+        className="press night"
         onClick={() => ctx.openCheckin(plan, wornLook)}
         style={{
           marginTop: 8,

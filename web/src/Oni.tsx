@@ -21,7 +21,8 @@ export const MOOD_LABEL: Record<Mood, { en: string; ja: string; line: string }> 
 
 export default function Oni({ mood, size = 64, night = false }: { mood: Mood; size?: number; night?: boolean }) {
   const ink = "#2B2724";
-  const horn = night ? "#F3EEE5" : ink;
+  // Horns are ink: theme-aware on normal screens (light in dark mode), pinned light at night.
+  const horn = night ? "#F3EEE5" : "var(--sumi)";
   return (
     <span
       role="img"
@@ -29,7 +30,7 @@ export default function Oni({ mood, size = 64, night = false }: { mood: Mood; si
       style={{ position: "relative", display: "inline-block", width: size, height: size * (150 / 140), flex: "none" }}
     >
       <svg viewBox="0 0 140 150" width="100%" height="100%" style={{ overflow: "visible", animation: MOTION[mood] }}>
-        <path d="M26 30 38 0 50 30Z M90 30 102 0 114 30Z" fill={horn} />
+        <path d="M26 30 38 0 50 30Z M90 30 102 0 114 30Z" style={{ fill: horn }} />
         <rect x="1" y="23" width="138" height="126" rx="30" fill="#C4472F" stroke={ink} strokeWidth="1.5" />
         {mood === "proud" && (
           <g>
@@ -116,7 +117,7 @@ function Z({ right, top, size, delay, night }: { right: number; top: number; siz
         top,
         fontFamily: "var(--display)",
         fontSize: Math.max(10, size),
-        color: night ? "#F3EEE5" : "#2B2724",
+        color: night ? "#F3EEE5" : "var(--sumi)",
         animation: `zzz 2.6s ease-out ${delay}s infinite`,
       }}
     >
