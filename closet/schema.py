@@ -140,6 +140,17 @@ class CheckinLearning(BaseModel):
     applies_when: str | None = Field(description="Short condition, e.g. 'evenings below 8°C', or null if always.")
 
 
+class SameGarment(BaseModel):
+    """Are two cutouts from different closet photos the same physical garment?
+    Observations come before the verdict, like the render judge."""
+
+    matching_details: str = Field(description="Specific details both images share: logo, print, stripes, buttons, wash, cut.")
+    conflicting_details: str = Field(description="Details that differ and can't be explained by folding, crumpling, lighting "
+                                                 "or seeing the other side; 'none' if nothing conflicts.")
+    same_item: bool
+    confidence: float = Field(description="0-1: how sure you are of same_item.")
+
+
 class PersonPhotoCheck(BaseModel):
     """Is a user's photo usable for the face version of try-on?"""
 

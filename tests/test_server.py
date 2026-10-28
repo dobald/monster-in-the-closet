@@ -228,6 +228,68 @@ def test_agent_loop_and_repair() -> None:
     assert trace["tokens_in"] == 400 and trace["tokens_out"] == 200, trace
 
 
+def test_duplicates(var_dir: Path) -> None:
+    """Cross-photo duplicates with a scripted judge: confident pairs merge (wear history and aliases
+    follow), unsure pairs go to review, and a pair the user calls different is never re-asked."""
+    from closet import dedupe as cdedupe
+    from closet.schema import Garment, SameGarment
+
+    run_dir = config.ROOT / "out" / f"_test_dupes_{var_dir.name}"
+    (run_dir / "cutouts").mkdir(parents=True)
+    rows = []
+    # a_big and a_small: one black sweatshirt shot twice (the bigger shot should win); b: a charcoal one, close enough in colour to be shortlisted.
+    for name, color, size in [("a_big.png", (20, 20, 20), (200, 220)), ("a_small.png", (24, 23, 22), (90, 100)),
+                              ("b.png", (34, 34, 40), (150, 160))]:
+        cutout_png(color, size).save(run_dir / "cutouts" / name)
+        rows.append({"file": name, **GARMENT})
+    (run_dir / "wardrobe.json").write_text(json.dumps(rows))
+
+    calls = []
+    verdicts = {}  # frozenset of ids -> SameGarment
+
+    def fake_judge(a_img, b_img, a_tags, b_tags):
+        key = frozenset((a_img.size, b_img.size))
+        calls.append(key)
+        return verdicts.get(key, SameGarment(matching_details="none", conflicting_details="colour", same_item=False, confidence=0.97))
+
+    orig = cdedupe.judge_same
+    cdedupe.judge_same = fake_judge
+    try:
+        with client_for("live", var_dir) as c:
+            c.post("/api/dev/seed", json={"run": str(run_dir.relative_to(config.ROOT))})
+            items = {i["source"]: i for i in c.get("/api/wardrobe").json()}
+            big, small, b = items["a_big.png"], items["a_small.png"], items["b.png"]
+            store = main.app.state.store
+            store.record_wear("2026-10-20", [small["id"]], None, None)
+
+            verdicts[frozenset(((200, 220), (90, 100)))] = SameGarment(
+                matching_details="same chest logo", conflicting_details="none", same_item=True, confidence=0.93)
+            verdicts[frozenset(((200, 220), (150, 160)))] = SameGarment(
+                matching_details="same cut", conflicting_details="maybe colour", same_item=True, confidence=0.6)
+            r = c.post("/api/wardrobe/duplicates/check").json()
+            assert [m["kept"]["id"] for m in r["merged"]] == [big["id"]] and r["merged"][0]["dropped_id"] == small["id"], r
+            kept = c.get(f"/api/wardrobe/{big['id']}").json()
+            assert kept["wear_count"] == 1 and kept["last_worn"] == "2026-10-20", "wear history follows the merge"
+            assert c.get(f"/api/wardrobe/{small['id']}").json()["id"] == big["id"], "old ids resolve to the kept item"
+            assert len(c.get("/api/wardrobe").json()) == 2
+            assert store.upsert_item(small["id"], "rescan", "x", None, Garment.model_validate(GARMENT), None) == big["id"]
+            assert len(c.get("/api/wardrobe").json()) == 2, "rescanning a merged cutout must not bring it back"
+
+            assert len(r["review"]) == 1 and {r["review"][0]["a"]["id"], r["review"][0]["b"]["id"]} == {big["id"], b["id"]}, r
+            n = len(calls)
+            assert c.post("/api/wardrobe/duplicates/check").json()["review"], "unsure pair stays in review"
+            assert len(calls) == n, "verdicts are cached per pair"
+            assert c.post("/api/wardrobe/duplicates/distinct", json={"a": b["id"], "b": big["id"]}).status_code == 204
+            r = c.post("/api/wardrobe/duplicates/check").json()
+            assert r["review"] == [] and r["checked"] == 0, r
+
+            r = c.post("/api/wardrobe/duplicates/merge", json={"a": b["id"], "b": big["id"]})
+            assert r.status_code == 200 and len(c.get("/api/wardrobe").json()) == 1, r.text
+    finally:
+        cdedupe.judge_same = orig
+        shutil.rmtree(run_dir, ignore_errors=True)
+
+
 def main_() -> None:
     tmp = Path(tempfile.mkdtemp(prefix="monster-test-"))
     run_dir = config.ROOT / "out" / f"_test_seed_{tmp.name}"
@@ -245,7 +307,9 @@ def main_() -> None:
         test_plan_wear_checkin(tmp / "plan", run_dir)
         test_validate_plan()
         test_agent_loop_and_repair()
-        print("OK: fixture mode, seeding, tag fixes, caching, dedupe, planning, wear, check-ins and the agent loop all behave.")
+        test_duplicates(tmp / "dupes")
+        print("OK: fixture mode, seeding, tag fixes, caching, dedupe, planning, wear, check-ins, the agent loop "
+              "and cross-photo duplicates all behave.")
     finally:
         shutil.rmtree(run_dir, ignore_errors=True)
         shutil.rmtree(tmp, ignore_errors=True)

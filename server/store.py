@@ -62,6 +62,16 @@ CREATE TABLE IF NOT EXISTS checkins (
     reply       TEXT NOT NULL,
     learned     TEXT                     -- CheckinLearning JSON
 );
+CREATE TABLE IF NOT EXISTS aliases (
+    alias_id    TEXT PRIMARY KEY,        -- a cutout id merged into...
+    item_id     TEXT NOT NULL,           -- ...this canonical item
+    created_at  TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS distinct_pairs (
+    a TEXT NOT NULL,                     -- the user said these two are different items (a < b)
+    b TEXT NOT NULL,
+    PRIMARY KEY (a, b)
+);
 CREATE TABLE IF NOT EXISTS preferences (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     created_at   TEXT NOT NULL,
@@ -87,11 +97,15 @@ class Store:
     # -- items
 
     def upsert_item(self, item_id: str, scan_id: str, source: str, confidence: float | None,
-                    tags: Garment | None, tag_error: str | None) -> None:
-        """Insert a scanned garment. A rescan of the same cutout keeps wear history and user edits."""
+                    tags: Garment | None, tag_error: str | None) -> str:
+        """Insert a scanned garment and return its id. A rescan of the same cutout keeps wear history and
+        user edits; a cutout already merged into another item returns that item's id untouched."""
         tags_json = tags.model_dump_json() if tags else None
         is_garment = int(tags.is_garment) if tags else 1
         with self._lock, self._db:
+            alias = self._db.execute("SELECT item_id FROM aliases WHERE alias_id = ?", (item_id,)).fetchone()
+            if alias:
+                return alias[0]
             self._db.execute(
                 """INSERT INTO items (id, scan_id, source, created_at, confidence, tags, tag_error, is_garment)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -102,11 +116,44 @@ class Store:
                      is_garment = CASE WHEN items.user_edited THEN items.is_garment ELSE excluded.is_garment END""",
                 (item_id, scan_id, source, now(), confidence, tags_json, tag_error, is_garment),
             )
+        return item_id
 
     def get_item(self, item_id: str) -> dict | None:
+        """An item by id, following merges so old plans and scans still resolve."""
         with self._lock:
             row = self._db.execute("SELECT * FROM items WHERE id = ?", (item_id,)).fetchone()
+            if not row:
+                row = self._db.execute(
+                    "SELECT items.* FROM aliases JOIN items ON items.id = aliases.item_id WHERE aliases.alias_id = ?",
+                    (item_id,)).fetchone()
         return _item(row) if row else None
+
+    # -- duplicates
+
+    def merge_items(self, keep: str, drop: str) -> None:
+        """Fold `drop` into `keep`: wear history moves over, and `drop`'s cutout id (plus anything
+        already merged into it) becomes an alias so a rescan doesn't bring it back."""
+        with self._lock, self._db:
+            k = self._db.execute("SELECT wear_count, last_worn FROM items WHERE id = ?", (keep,)).fetchone()
+            d = self._db.execute("SELECT wear_count, last_worn FROM items WHERE id = ?", (drop,)).fetchone()
+            if not k or not d:
+                raise KeyError("No such item.")
+            last = max(filter(None, (k["last_worn"], d["last_worn"])), default=None)
+            self._db.execute("UPDATE items SET wear_count = ?, last_worn = ? WHERE id = ?",
+                             (k["wear_count"] + d["wear_count"], last, keep))
+            self._db.execute("UPDATE wears SET item_id = ? WHERE item_id = ?", (keep, drop))
+            self._db.execute("UPDATE aliases SET item_id = ? WHERE item_id = ?", (keep, drop))
+            self._db.execute("INSERT OR REPLACE INTO aliases VALUES (?, ?, ?)", (drop, keep, now()))
+            self._db.execute("DELETE FROM distinct_pairs WHERE a = ? OR b = ?", (drop, drop))
+            self._db.execute("DELETE FROM items WHERE id = ?", (drop,))
+
+    def mark_distinct(self, a: str, b: str) -> None:
+        with self._lock, self._db:
+            self._db.execute("INSERT OR IGNORE INTO distinct_pairs VALUES (?, ?)", tuple(sorted((a, b))))
+
+    def distinct_pairs(self) -> set[tuple[str, str]]:
+        with self._lock:
+            return {(r[0], r[1]) for r in self._db.execute("SELECT a, b FROM distinct_pairs").fetchall()}
 
     def list_items(self, include_hidden: bool = False, category: str | None = None) -> list[dict]:
         with self._lock:
@@ -127,6 +174,7 @@ class Store:
 
     def delete_item(self, item_id: str) -> bool:
         with self._lock, self._db:
+            self._db.execute("DELETE FROM aliases WHERE item_id = ?", (item_id,))
             return self._db.execute("DELETE FROM items WHERE id = ?", (item_id,)).rowcount > 0
 
     # -- scans

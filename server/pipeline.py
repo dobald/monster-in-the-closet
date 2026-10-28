@@ -20,6 +20,7 @@ from closet import config, media, models, scan
 from closet.schema import Garment
 
 from .cache import Cache, scan_key, sha256, tag_key
+from .dedupe import Dedupe
 from .settings import Settings
 from .store import Store, now
 
@@ -50,6 +51,7 @@ class Pipeline:
         self.settings, self.cache, self.store = settings, cache, store
         self._photo_gate = asyncio.Semaphore(scan.PHOTO_CONCURRENCY)
         self._tag_gate = asyncio.Semaphore(TAG_CONCURRENCY)
+        self.dedupe = Dedupe(settings, cache, store)
 
     # -- scanning
 
@@ -113,8 +115,18 @@ class Pipeline:
         kept = [(r.source, k) for r in results for k in r.kept]
         unique = list({k["item_id"]: (src, k) for src, k in kept}.values())  # same cutout twice -> once
         tags = await asyncio.gather(*(self._tag(k["item_id"]) for _, k in unique))
+        item_ids, new_ids = [], []
         for (src, k), (garment, err) in zip(unique, tags):
-            self.store.upsert_item(k["item_id"], scan_id, src, k.get("confidence"), garment, err)
+            existed = self.store.get_item(k["item_id"]) is not None
+            item_id = self.store.upsert_item(k["item_id"], scan_id, src, k.get("confidence"), garment, err)
+            item_ids.append(item_id)
+            if not existed:
+                new_ids.append(item_id)
+
+        # The same garment shot in two photos (this batch or an earlier one) becomes one item.
+        dupes = await self.dedupe.check(new_ids) if new_ids else {"merged": [], "review": [], "checked": 0}
+        merged_into = {m["dropped_id"]: m["kept_id"] for m in dupes["merged"]}
+        item_ids = list(dict.fromkeys(merged_into.get(i, i) for i in item_ids))
 
         record = {
             "id": scan_id,
@@ -124,11 +136,11 @@ class Pipeline:
             "photos": len(photos),
             "cached_photos": sum(r.cached for r in results),
             "replayed": any(r.replayed for r in results),
-            "item_ids": [k["item_id"] for _, k in unique],
+            "item_ids": item_ids,
             "dropped": [d for r in results for d in r.dropped],
         }
         self.store.add_scan(record)
-        return record
+        return {**record, "duplicates": dupes}
 
     # -- dev: import a spike run as fixtures
 

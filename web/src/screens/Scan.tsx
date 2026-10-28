@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { api, itemName, type Scan as ScanResult } from "../api";
 import type { AppCtx } from "../App";
 import Oni from "../Oni";
+import { MergedNote, ReviewPairs } from "./Duplicates";
 
 // Flat-lay scan (wireframe 1a/1b): pick or shoot 1-10 photos of 4-8 items each, send them as one batch,
 // then show the cutouts the oni found.
@@ -177,6 +178,7 @@ export default function Scan({ ctx }: { ctx: AppCtx }) {
 }
 
 function ScanDone({ result, again, ctx }: { result: ScanResult; again: () => void; ctx: AppCtx }) {
+  const [review, setReview] = useState(result.duplicates?.review ?? []);
   return (
     <main className="screen">
       <header style={{ display: "flex", alignItems: "center", gap: 12 }}>
@@ -189,6 +191,9 @@ function ScanDone({ result, again, ctx }: { result: ScanResult; again: () => voi
           </span>
         </div>
       </header>
+
+      {result.duplicates && <MergedNote dupes={result.duplicates} />}
+      <ReviewPairs pairs={review} ctx={ctx} onResolved={(p) => setReview(review.filter((x) => x !== p))} />
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 10 }}>
         {result.items.map((it, i) => (

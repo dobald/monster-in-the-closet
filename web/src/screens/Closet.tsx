@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
-import { api, idleDays, itemName, type Item } from "../api";
+import { api, idleDays, itemName, type DuplicatePair, type Item } from "../api";
 import type { AppCtx } from "../App";
 import Oni from "../Oni";
+import { ReviewPairs } from "./Duplicates";
 
 const FILTERS: { label: string; test: (i: Item) => boolean }[] = [
   { label: "All", test: () => true },
@@ -19,6 +20,28 @@ export default function Closet({ ctx }: { ctx: AppCtx }) {
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState("All");
   const [q, setQ] = useState("");
+  const [checking, setChecking] = useState(false);
+  const [review, setReview] = useState<DuplicatePair[]>([]);
+
+  const findDuplicates = async () => {
+    setChecking(true);
+    try {
+      const d = await api.findDuplicates();
+      setReview(d.review);
+      if (d.merged.length) ctx.bumpWardrobe();
+      ctx.toast(
+        d.merged.length
+          ? `Merged ${d.merged.length} duplicate${d.merged.length === 1 ? "" : "s"}.` + (d.review.length ? ` ${d.review.length} to check.` : "")
+          : d.review.length
+            ? `${d.review.length} possible duplicate${d.review.length === 1 ? "" : "s"} to check.`
+            : "No duplicates. Every item is one of a kind.",
+      );
+    } catch (e) {
+      ctx.toast((e as Error).message);
+    } finally {
+      setChecking(false);
+    }
+  };
 
   useEffect(() => {
     api
@@ -48,14 +71,20 @@ export default function Closet({ ctx }: { ctx: AppCtx }) {
       <header style={{ display: "flex", justifyContent: "space-between", alignItems: "stretch", borderBottom: "var(--line)", paddingBottom: 8 }}>
         <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
           <h1 className="display" style={{ fontSize: 60 }}>CLOSET</h1>
-          <span style={{ fontSize: 13, fontWeight: 500 }}>
+          <span style={{ fontSize: 13, fontWeight: 500, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
             {items ? `${items.length} items` : "Loading…"}
             {forgotten > 0 && (
-              <>
-                {" · "}
-                <span style={{ background: "var(--shu)", color: "#fff", borderRadius: 3, padding: "1px 5px", fontWeight: 700 }}>{forgotten} forgotten</span>
-              </>
+              <span style={{ background: "var(--shu)", color: "#fff", borderRadius: 3, padding: "1px 5px", fontWeight: 700 }}>{forgotten} forgotten</span>
             )}
+            <button
+              type="button"
+              className="chip press"
+              style={{ height: 28, padding: "0 10px", fontSize: 12 }}
+              disabled={checking || !items?.length}
+              onClick={findDuplicates}
+            >
+              {checking ? "Checking…" : "Find duplicates ⧉"}
+            </button>
           </span>
         </div>
         <span lang="ja" aria-hidden="true" className="vertical" style={{ fontSize: 22 }}>
@@ -86,6 +115,8 @@ export default function Closet({ ctx }: { ctx: AppCtx }) {
         ))}
         <span style={{ flex: "none", width: 10 }} />
       </div>
+
+      <ReviewPairs pairs={review} ctx={ctx} onResolved={(p) => setReview(review.filter((x) => x !== p))} />
 
       {error && <p className="small">{error}</p>}
 

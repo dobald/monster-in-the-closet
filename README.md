@@ -90,6 +90,27 @@ Docs: http://127.0.0.1:8000/docs
 - **No duplicates.** Item ids are hashes of the cutout, so the same garment scanned twice is stored once. Wear history and tag fixes survive a rescan.
 - **Local data stays local.** The database, cutouts and cache live in `var/`, which git ignores.
 
+**Same garment, different photos.** Item ids hash the cutout, so one hoodie shot in two batches used to become two items. Every scan, and the Closet's "Find duplicates" button, now runs a cross-photo check:
+1. **Shortlist pairs cheaply:** compatible categories and a close measured colour (ΔE ≤ 20). On the real 11-item test closet this left 13 pairs.
+2. **Judge each pair:** Muse Spark 1.3 looks at both cutouts and writes down matching and conflicting details before giving a verdict. Verdicts are cached per pair.
+3. **Act on the verdict:**
+   - At confidence ≥ 0.85 the two items merge. The cutout that shows the most garment is kept, wear history moves over, and the other cutout id becomes an alias, so a rescan doesn't bring it back.
+   - Less certain matches become "same item?" cards for the user to decide.
+   - "Different" is remembered, so that pair is never asked again.
+
+On the test closet the judge was 13/13 right in about 10s:
+- the black sweatshirt shot twice, the tour tee shot twice, and the track pants shot three times all merged (confidence 0.88–0.96)
+- the white henley was kept separate from the white tour tee (0.99)
+- the closet went from 11 items to 7
+
+| Endpoint | What it does |
+|---|---|
+| `POST /api/wardrobe/duplicates/check` | Run the check over the closet: confident pairs merge; returns `merged` and `review` |
+| `POST /api/wardrobe/duplicates/merge` | `{a, b}`: the user confirmed one garment |
+| `POST /api/wardrobe/duplicates/distinct` | `{a, b}`: the user says these are different; never suggest again |
+
+Scan responses carry the same `duplicates` block for the items that scan added.
+
 Tests (no API calls): `python tests/test_server.py` and `python tests/test_offline.py`
 
 ## Morning planner and evening check-in

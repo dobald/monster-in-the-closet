@@ -113,6 +113,20 @@ export interface Preference {
   applies_when: string | null;
 }
 
+export interface DuplicatePair {
+  a: Item;
+  b: Item;
+  checked: boolean; // false: no model verdict yet (fixture mode)
+  confidence: number | null;
+  reason: string;
+}
+
+export interface Duplicates {
+  merged: { kept: Item; dropped_id: string; confidence: number; reason: string }[];
+  review: DuplicatePair[];
+  checked: number;
+}
+
 export interface Scan {
   id: string;
   mode: string;
@@ -122,6 +136,7 @@ export interface Scan {
   replayed: boolean;
   dropped: { source: string; reason: string }[];
   items: Item[];
+  duplicates: Duplicates | null;
 }
 
 export interface Health {
@@ -168,6 +183,9 @@ export const api = {
   checkin: (a: CheckinAnswers) => call<CheckinResult>("/api/checkins", json("POST", a)),
   wardrobe: () => call<Item[]>("/api/wardrobe"),
   deleteItem: (id: string) => call<void>(`/api/wardrobe/${id}`, { method: "DELETE" }),
+  findDuplicates: () => call<Duplicates>("/api/wardrobe/duplicates/check", { method: "POST" }),
+  mergeItems: (a: string, b: string) => call<Item>("/api/wardrobe/duplicates/merge", json("POST", { a, b })),
+  notDuplicates: (a: string, b: string) => call<void>("/api/wardrobe/duplicates/distinct", json("POST", { a, b })),
   preferences: () => call<Preference[]>("/api/preferences"),
   forget: (id: number) => call<void>(`/api/preferences/${id}`, { method: "DELETE" }),
   scan: (photos: File[]) => {

@@ -47,6 +47,27 @@ class ItemOut(BaseModel):
     tag_error: str | None
 
 
+class MergedOut(BaseModel):
+    kept: ItemOut
+    dropped_id: str
+    confidence: float
+    reason: str
+
+
+class ReviewOut(BaseModel):
+    a: ItemOut
+    b: ItemOut
+    checked: bool  # False: no model verdict (fixture mode or a failed call)
+    confidence: float | None
+    reason: str
+
+
+class DuplicatesOut(BaseModel):
+    merged: list[MergedOut]
+    review: list[ReviewOut]
+    checked: int
+
+
 class ScanOut(BaseModel):
     id: str
     created_at: str
@@ -57,6 +78,12 @@ class ScanOut(BaseModel):
     replayed: bool
     dropped: list[dict[str, Any]]
     items: list[ItemOut]
+    duplicates: DuplicatesOut | None = None  # only on the response to the scan itself
+
+
+class PairIn(BaseModel):
+    a: str
+    b: str
 
 
 class SeedIn(BaseModel):
@@ -135,7 +162,47 @@ async def create_scan(photos: list[UploadFile] = File(..., description="1-10 fla
         raise HTTPException(409, str(e))
     store = app.state.store
     items = [store.get_item(i) for i in record["item_ids"]]
-    return ScanOut(**{k: v for k, v in record.items() if k != "item_ids"}, items=[_item_out(i) for i in items if i])
+    return ScanOut(**{k: v for k, v in record.items() if k not in ("item_ids", "duplicates")},
+                   items=[_item_out(i) for i in items if i], duplicates=_dupes_out(record["duplicates"]))
+
+
+def _dupes_out(d: dict) -> DuplicatesOut:
+    store = app.state.store
+    merged = [MergedOut(kept=_item_out(k), dropped_id=m["dropped_id"], confidence=m["confidence"], reason=m["reason"])
+              for m in d["merged"] if (k := store.get_item(m["kept_id"]))]
+    review = []
+    for r in d["review"]:
+        a, b = store.get_item(r["a_id"]), store.get_item(r["b_id"])
+        if a and b and a["id"] != b["id"]:
+            review.append(ReviewOut(a=_item_out(a), b=_item_out(b), checked=r["checked"],
+                                    confidence=r["confidence"], reason=r["reason"]))
+    return DuplicatesOut(merged=merged, review=review, checked=d["checked"])
+
+
+@app.post("/api/wardrobe/duplicates/check", response_model=DuplicatesOut)
+async def check_duplicates() -> DuplicatesOut:
+    """Look for the same garment scanned more than once. Confident matches merge; unsure ones come back for review."""
+    return _dupes_out(await app.state.pipeline.dedupe.check())
+
+
+@app.post("/api/wardrobe/duplicates/merge", response_model=ItemOut)
+def merge_duplicates(body: PairIn) -> ItemOut:
+    """The user confirmed two items are one garment: keep the better cutout, fold in the other's wear history."""
+    store = app.state.store
+    a, b = store.get_item(body.a), store.get_item(body.b)
+    if not a or not b:
+        raise HTTPException(404, "No such item.")
+    if a["id"] == b["id"]:
+        return _item_out(a)
+    keep, drop = app.state.pipeline.dedupe.keep_drop(a, b)
+    store.merge_items(keep["id"], drop["id"])
+    return _item_out(store.get_item(keep["id"]))
+
+
+@app.post("/api/wardrobe/duplicates/distinct", status_code=204)
+def not_duplicates(body: PairIn) -> None:
+    """The user says these are two different items: never suggest the pair again."""
+    app.state.store.mark_distinct(body.a, body.b)
 
 
 @app.get("/api/scans/{scan_id}", response_model=ScanOut)
