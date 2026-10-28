@@ -1,13 +1,15 @@
 import { useState } from "react";
 import { api, idleDays, itemName, type Item } from "../api";
 import type { AppCtx } from "../App";
+import { bucketFor, LastWornSelect } from "./LastWorn";
 
 // Item detail (wireframe 3a, trimmed): the cutout, its tags and wear history, and a remove action.
 
 export default function ItemSheet({ item, ctx, onClose }: { item: Item; ctx: AppCtx; onClose: () => void }) {
   const [confirming, setConfirming] = useState(false);
+  const [current, setCurrent] = useState(item);
   const t = item.tags;
-  const idle = idleDays(item);
+  const idle = idleDays(current);
 
   const remove = async () => {
     try {
@@ -58,10 +60,29 @@ export default function ItemSheet({ item, ctx, onClose }: { item: Item; ctx: App
 
         <h1 className="display" style={{ fontSize: 30, lineHeight: 1.05 }}>{itemName(item)}</h1>
         <span className="small">
-          {item.last_worn ? `Last worn ${new Date(item.last_worn + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short" })}` : "Not worn since you scanned it"}
+          {current.last_worn
+            ? `${current.worn_estimated ? "Last worn around" : "Last worn"} ${new Date(current.last_worn + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}`
+            : "No wear history yet"}
           {" · from "}
           {item.source}
         </span>
+
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <span className="label" style={{ width: 80 }}>LAST WORN</span>
+          <LastWornSelect
+            item={current}
+            value={bucketFor(current)}
+            onChange={async (days) => {
+              try {
+                const [updated] = await api.setLastWorn([{ id: current.id, days_ago: days }]);
+                setCurrent(updated);
+                ctx.bumpWardrobe();
+              } catch (e) {
+                ctx.toast((e as Error).message);
+              }
+            }}
+          />
+        </div>
 
         {t && (
           <>

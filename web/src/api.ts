@@ -31,6 +31,7 @@ export interface Item {
   user_edited: boolean;
   wear_count: number;
   last_worn: string | null;
+  worn_estimated?: boolean; // last_worn is the user's estimate, not a logged wear
   tags: Tags | null;
   tag_error: string | null;
 }
@@ -65,10 +66,30 @@ export interface Plan {
   notes: string;
   weather: { parts?: Record<"morning" | "afternoon" | "evening", WeatherPart> };
   calendar: { events: CalendarEvent[] };
-  trace: { provider?: string; model?: string; seconds?: number; cached?: boolean };
+  trace: {
+    provider?: string;
+    model?: string;
+    seconds?: number;
+    cached?: boolean;
+    tokens_in?: number;
+    tokens_out?: number;
+    repairs?: number;
+    failures?: string[];
+    steps?: TraceStep[];
+  };
   weather_summary: string;
   plans_summary: string;
   looks: Look[];
+}
+
+export interface TraceStep {
+  kind: "context" | "model" | "tool" | "check" | "repair" | "rules" | "done";
+  label: string;
+  detail: string;
+  thought?: string | null; // an excerpt of the model's reasoning
+  ms?: number;
+  tokens?: number;
+  ok?: boolean; // checks only
 }
 
 export type Mood = "restless" | "calm" | "proud" | "fed" | "sleepy";
@@ -292,6 +313,8 @@ export const api = {
   wear: (planId: string, look: number) => call<WearResult>(`/api/plans/${planId}/wear`, json("POST", { look })),
   checkin: (a: CheckinAnswers) => call<CheckinResult>("/api/checkins", json("POST", a)),
   wardrobe: () => call<Item[]>("/api/wardrobe"),
+  setLastWorn: (items: { id: string; days_ago: number | null }[]) =>
+    call<Item[]>("/api/wardrobe/last-worn", json("POST", { items })),
   deleteItem: (id: string) => call<void>(`/api/wardrobe/${id}`, { method: "DELETE" }),
   findDuplicates: () => call<Duplicates>("/api/wardrobe/duplicates/check", { method: "POST" }),
   mergeItems: (a: string, b: string) => call<Item>("/api/wardrobe/duplicates/merge", json("POST", { a, b })),

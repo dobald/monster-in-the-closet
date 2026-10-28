@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api, ApiError, idleDays, shortName, type Item, type Plan, type WeatherPart } from "../api";
 import type { AppCtx } from "../App";
 import Oni, { MOOD_LABEL } from "../Oni";
+import TraceSheet from "./Trace";
 
 const WEEKDAY_JA = ["日曜日", "月曜日", "火曜日", "水曜日", "木曜日", "金曜日", "土曜日"];
 const LOOK_LETTERS = ["A", "B", "C"];
@@ -22,6 +23,7 @@ export default function Today({ ctx }: { ctx: AppCtx }) {
   const [adjust, setAdjust] = useState<Record<string, boolean>>({});
   const [wearing, setWearing] = useState(false);
   const [wornLook, setWornLook] = useState<number | null>(null);
+  const [showTrace, setShowTrace] = useState(false);
 
   const replan = async (notes: string, fresh = false) => {
     setLoad({ state: "thinking" });
@@ -244,7 +246,8 @@ export default function Today({ ctx }: { ctx: AppCtx }) {
         </section>
       )}
 
-      {plan && load.state === "ready" && <PlanSource plan={plan} />}
+      {plan && load.state === "ready" && <PlanSource plan={plan} onOpen={() => setShowTrace(true)} />}
+      {showTrace && plan && <TraceSheet plan={plan} onClose={() => setShowTrace(false)} />}
 
       <button
         type="button"
@@ -488,17 +491,35 @@ function Thinking({ slow }: { slow: boolean }) {
   );
 }
 
-function PlanSource({ plan }: { plan: Plan }) {
+// Who made the plan, and the way into its step-by-step trace.
+function PlanSource({ plan, onOpen }: { plan: Plan; onOpen: () => void }) {
   const t = plan.trace;
   const who =
     plan.source === "rules" ? "RULE PICKER" : (t.model ?? t.provider ?? "MODEL").replace("meta-models/", "").toUpperCase();
   const extra = t.cached || plan.source === "cache" ? "CACHED" : t.seconds ? `${t.seconds}S` : "";
+  const steps = t.steps?.length ?? 0;
   return (
-    <span className="label muted" style={{ fontWeight: 400, textAlign: "center", marginTop: 6 }}>
-      PICKED BY {who}
-      {extra ? ` · ${extra}` : ""}
-      {plan.notes ? ` · “${plan.notes.toUpperCase()}”` : ""}
-    </span>
+    <button
+      type="button"
+      className="press"
+      onClick={onOpen}
+      style={{
+        marginTop: 6, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "8px 12px",
+        border: "1.5px dashed var(--sumi)", borderRadius: 8, background: "transparent", textAlign: "left",
+      }}
+    >
+      <span style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+        <strong style={{ fontSize: 13 }}>How the oni decided</strong>
+        <span className="label muted" style={{ fontWeight: 400, fontSize: 9 }}>
+          {who}
+          {extra ? ` · ${extra}` : ""}
+          {steps ? ` · ${steps} STEPS` : ""}
+          {t.repairs ? ` · ${t.repairs} REPAIR` : ""}
+          {plan.notes ? ` · “${plan.notes.toUpperCase()}”` : ""}
+        </span>
+      </span>
+      <span aria-hidden="true" style={{ fontWeight: 700 }}>→</span>
+    </button>
   );
 }
 

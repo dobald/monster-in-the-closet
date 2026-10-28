@@ -112,7 +112,8 @@ class Planning:
             self.cache.put("plans", key, {"plan": plan.model_dump(), "trace": trace})
         else:
             plan = planner.plan_with_rules(items, weather, calendar, notes, day)
-            trace, source = {"provider": "rules", "reason": "fixture mode"}, "rules"
+            trace, source = {"provider": "rules", "reason": "fixture mode",
+                             "steps": planner.rule_steps(items, prefs, weather, calendar, notes, plan, "Fixture mode: no model calls")}, "rules"
 
         record = {"id": uuid.uuid4().hex[:12], "day": day.isoformat(), "created_at": now(), "source": source,
                   "plan": plan.model_dump(), "trace": trace, "weather": weather, "calendar": calendar, "notes": notes}
@@ -131,7 +132,8 @@ class Planning:
             except Exception as e:
                 failures.append(f"{provider}: {type(e).__name__}: {e}"[:300])
         plan = planner.plan_with_rules(items, weather, calendar, notes, day)
-        return plan, {"provider": "rules", "failures": failures}, "rules"
+        steps = planner.rule_steps(items, prefs, weather, calendar, notes, plan, "The models didn't answer, so the rules stepped in")
+        return plan, {"provider": "rules", "failures": failures, "steps": steps}, "rules"
 
     # -- wearing an outfit
 

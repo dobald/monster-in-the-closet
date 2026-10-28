@@ -134,6 +134,27 @@ The oni's brain runs on **Muse Spark Open via Baseten** as a small tool-using ag
 | `GET /api/preferences`, `DELETE /api/preferences/{id}` | What the oni has learned; the user can make it forget |
 | `GET /api/oni` | Mood (restless, calm, proud, fed, sleepy), closet-alive %, forgotten count, streak |
 
+**"How the oni decided": the visible agent trace.** Every plan records each step of the run, and Today shows it as a timeline. Live, one run on Muse Spark Open (14.5s, 4.3k tokens in / 3.5k out) looked like this:
+1. **Reads your closet:** 7 garments, 6 with wear history, 2 learned preferences.
+2. **Muse Spark Open plans its next move:** calls `get_weather()` and `get_calendar()`. A short excerpt of its reasoning is shown; Baseten returns `reasoning_content`.
+3. **The tools return:** "7–15°C, feels like 4° at the coldest" and "10:00 Studio crit (smart casual), 19:00 Dinner outside".
+4. **Writes the plan as structured output:** three named looks.
+5. **Checks every look against your real closet:** all item ids exist, and every look has a top and a bottom.
+6. **Plan ready:** "rescues your crewneck sweatshirt".
+
+When a check fails, the trace shows the failure and the repair round that fixed it. The rule picker, used in fixture mode or when the models fail, records the same kind of trace.
+
+**Wear history from day one.** A freshly scanned closet looks freshly worn, so nothing could be rescued and the closet-alive % meant nothing. Now "when did you last wear this?" asks for a rough answer per piece: this week, this month, 1–3 months, 3–6 months, 6–12 months, or over a year. It appears in three places:
+- a step in getting started
+- the item sheet
+- a Closet banner, shown when a third or more of your pieces have no history
+
+These answers are estimates. They never count as wears, a logged "Wear this" always replaces them, and an older guess never hides a newer logged wear. Wearing something estimated at "3–6 months ago" triggers the 救 rescue straight away.
+
+| Endpoint | What it does |
+|---|---|
+| `POST /api/wardrobe/last-worn` | `{items: [{id, days_ago}]}`: estimated last-worn dates; `days_ago: null` clears an estimate |
+
 Plans are cached under a hash of everything they depend on: wardrobe and wear state, preferences, weather, calendar, notes and day. Asking twice is free, and wearing an outfit or learning a preference naturally produces a new plan.
 
 **Live run (11-garment closet, Toronto, feels like −2° in the morning, a smart-casual crit and a patio dinner):**
@@ -231,14 +252,15 @@ In the Claude desktop app, the `api-live` and `web-lan` launch configs do the sa
 
 ## Getting started
 
-The first time the app opens, it walks through six short steps and saves as it goes, so leaving halfway loses nothing:
+The first time the app opens, it walks through seven short steps and saves as it goes, so leaving halfway loses nothing:
 
 1. **Hello:** the oni introduces itself, with three promises: only what you own, dressed for your day, and second-hand first.
 2. **Where are you?** City search using Open-Meteo geocoding (free, no key), or "Use my location" where the browser allows it. There's an optional "I run cold / warm" choice, which seeds a preference the planner reads from day one.
 3. **What's on?** Upload an `.ics` export from Google or Apple Calendar, use the demo calendar, or skip. Only event titles, times and places are read, and the file stays in `var/private/`.
 4. **Feed me clothes:** a flat-lay guide (4–8 pieces, no overlaps, print side up), then scanning in batches. **Next** unlocks once there's at least a top and a bottom, or a dress.
-5. **Who wears it?** The try-on setup, which can be skipped. Choosing the mannequin starts dressing your whole closet in the background.
-6. **Your first pick:** a real plan for today, with your weather and calendar. "See my day" finishes setup.
+5. **When did you last wear these?** A rough answer per piece, so forgotten clothes are visible from day one.
+6. **Who wears it?** The try-on setup, which can be skipped. Choosing the mannequin starts dressing your whole closet in the background.
+7. **Your first pick:** a real plan for today, with your weather and calendar. "See my day" finishes setup.
 
 Notes → **Your setup** reopens the flow from step 2, to change your city or calendar. The planner, thrift finder and check-ins now use the saved location and calendar; `.env` values are only the fallback before setup.
 

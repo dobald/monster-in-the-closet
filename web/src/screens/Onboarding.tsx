@@ -2,19 +2,21 @@ import { useEffect, useRef, useState } from "react";
 import { api, ApiError, itemName, type Item, type Place, type Plan, type Profile, type Scan } from "../api";
 import type { AppCtx } from "../App";
 import Oni from "../Oni";
+import { LastWornList } from "./LastWorn";
 import { Setup } from "./TryOn";
 
-// Getting started: meet the oni, then give it the three things it needs to dress you (where you
-// are, what's on today, what you own), optionally who wears the try-on, and end on a real first
+// Getting started: meet the oni, then give it the things it needs to dress you (where you are,
+// what's on today, what you own and roughly when you last wore it), optionally who wears the try-on, and end on a real first
 // pick. Every step saves as you go, so leaving halfway loses nothing; "editing" reopens it from
 // the location step (Notes → Your setup).
 
-type Step = "hello" | "place" | "day" | "closet" | "wearer" | "first";
+type Step = "hello" | "place" | "day" | "closet" | "history" | "wearer" | "first";
 const STEPS: { id: Step; en: string; ja: string }[] = [
   { id: "hello", en: "HELLO", ja: "はじめまして" },
   { id: "place", en: "WEATHER", ja: "天気" },
   { id: "day", en: "YOUR DAY", ja: "予定" },
   { id: "closet", en: "CLOSET", ja: "服" },
+  { id: "history", en: "LAST WORN", ja: "思い出" },
   { id: "wearer", en: "TRY-ON", ja: "試着" },
   { id: "first", en: "FIRST PICK", ja: "最初のコーデ" },
 ];
@@ -81,6 +83,7 @@ export default function Onboarding({ ctx, editing, onDone }: { ctx: AppCtx; edit
           {step === "place" && <PlaceStep profile={profile} ctx={ctx} onNext={next} />}
           {step === "day" && <DayStep profile={profile} ctx={ctx} onNext={next} />}
           {step === "closet" && <ClosetStep profile={profile} ctx={ctx} onChange={refresh} onNext={next} />}
+          {step === "history" && <HistoryStep ctx={ctx} onNext={next} />}
           {step === "wearer" && <WearerStep profile={profile} ctx={ctx} onNext={next} />}
           {step === "first" && <FirstPick profile={profile} ctx={ctx} editing={editing} onScan={() => setStep("closet")} onDone={onDone} />}
         </div>
@@ -481,7 +484,42 @@ function FlatLayGuide() {
   );
 }
 
-// ------------------------------------------------------------------ 5. who wears it
+// ------------------------------------------------------------------ 5. when did you last wear these
+
+function HistoryStep({ ctx, onNext }: { ctx: AppCtx; onNext: () => void }) {
+  const [items, setItems] = useState<Item[] | null>(null);
+  useEffect(() => {
+    api.wardrobe().then(setItems).catch((e) => ctx.toast((e as Error).message));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  return (
+    <>
+      <Title en="WHEN DID YOU LAST WEAR THESE?" ja="思い出" sub="A rough guess is fine. It's how I know what you've forgotten, so I can bring it back." />
+      {!items ? (
+        <p className="small">Loading…</p>
+      ) : items.length === 0 ? (
+        <Footer>
+          <button type="button" className="btn primary press block" onClick={onNext}>Next →</button>
+        </Footer>
+      ) : (
+        <LastWornList
+          items={items}
+          cta="Next →"
+          onError={ctx.toast}
+          onSaved={(updated) => {
+            if (updated.length) ctx.bumpWardrobe();
+            onNext();
+          }}
+        />
+      )}
+      <button type="button" onClick={onNext} className="small" style={{ border: 0, background: "none", textDecoration: "underline", color: "inherit", alignSelf: "center", padding: 4 }}>
+        Skip for now
+      </button>
+    </>
+  );
+}
+
+// ------------------------------------------------------------------ 6. who wears it
 
 function WearerStep({ profile, ctx, onNext }: { profile: Profile; ctx: AppCtx; onNext: () => void }) {
   return (
@@ -505,7 +543,7 @@ function WearerStep({ profile, ctx, onNext }: { profile: Profile; ctx: AppCtx; o
   );
 }
 
-// ------------------------------------------------------------------ 6. first pick
+// ------------------------------------------------------------------ 7. first pick
 
 function FirstPick({ profile, ctx, editing, onScan, onDone }: { profile: Profile; ctx: AppCtx; editing: boolean; onScan: () => void; onDone: () => void }) {
   const [plan, setPlan] = useState<Plan | null>(null);

@@ -3,6 +3,7 @@ import { api, idleDays, itemName, type DuplicatePair, type Item } from "../api";
 import type { AppCtx } from "../App";
 import Oni from "../Oni";
 import { ReviewPairs } from "./Duplicates";
+import { LastWornList } from "./LastWorn";
 
 const FILTERS: { label: string; test: (i: Item) => boolean }[] = [
   { label: "All", test: () => true },
@@ -22,6 +23,7 @@ export default function Closet({ ctx }: { ctx: AppCtx }) {
   const [q, setQ] = useState("");
   const [checking, setChecking] = useState(false);
   const [review, setReview] = useState<DuplicatePair[]>([]);
+  const [history, setHistory] = useState(false);
 
   const findDuplicates = async () => {
     setChecking(true);
@@ -64,6 +66,7 @@ export default function Closet({ ctx }: { ctx: AppCtx }) {
   }, [items, filter, q]);
 
   const forgotten = items?.filter((i) => idleDays(i) >= 30).length ?? 0;
+  const noHistory = items?.filter((i) => !i.last_worn).length ?? 0;
   const present = FILTERS.filter((f) => f.label === "All" || f.label === "Forgotten" || items?.some(f.test));
 
   return (
@@ -117,6 +120,46 @@ export default function Closet({ ctx }: { ctx: AppCtx }) {
       </div>
 
       <ReviewPairs pairs={review} ctx={ctx} onResolved={(p) => setReview(review.filter((x) => x !== p))} />
+
+      {items && noHistory >= 2 && noHistory * 3 >= items.length && (
+        <button
+          type="button"
+          className="card press"
+          onClick={() => setHistory(true)}
+          style={{ padding: "10px 12px", display: "flex", alignItems: "center", gap: 10, textAlign: "left", boxShadow: "3px 3px 0 var(--shu)" }}
+        >
+          <span lang="ja" className="hanko" style={{ width: 40, height: 40, fontSize: 17, flex: "none" }}>思</span>
+          <span style={{ flex: 1, display: "flex", flexDirection: "column", gap: 2 }}>
+            <strong style={{ fontSize: 14 }}>When did you last wear these?</strong>
+            <span className="small">{noHistory} pieces have no history yet, so the oni can't tell what's been forgotten.</span>
+          </span>
+          <span aria-hidden="true" style={{ fontWeight: 700 }}>→</span>
+        </button>
+      )}
+      {history && items && (
+        <div className="overlay" role="dialog" aria-modal="true" aria-label="When did you last wear these?" onClick={(e) => e.target === e.currentTarget && setHistory(false)}>
+          <div className="sheet">
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <button type="button" className="icon-btn press" aria-label="Close" onClick={() => setHistory(false)}>×</button>
+              <span className="label" style={{ fontWeight: 400 }}>WEAR HISTORY · <span lang="ja">思い出</span></span>
+            </div>
+            <h1 className="display" style={{ fontSize: "clamp(30px, 10vw, 40px)", lineHeight: 0.95 }}>WHEN DID YOU LAST WEAR THESE?</h1>
+            <span className="small">A rough guess is fine. Guesses never count as wears, and wearing something here always wins.</span>
+            <LastWornList
+              items={items}
+              cta="Save"
+              onError={ctx.toast}
+              onSaved={(updated) => {
+                setHistory(false);
+                if (updated.length) {
+                  ctx.toast(`Saved ${updated.length} piece${updated.length === 1 ? "" : "s"}. The oni can spot forgotten clothes now.`);
+                  ctx.bumpWardrobe();
+                }
+              }}
+            />
+          </div>
+        </div>
+      )}
 
       {error && <p className="small">{error}</p>}
 

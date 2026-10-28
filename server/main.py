@@ -9,7 +9,7 @@ Interactive docs at http://127.0.0.1:8000/docs
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any, Literal
 
@@ -51,6 +51,7 @@ class ItemOut(BaseModel):
     user_edited: bool
     wear_count: int
     last_worn: str | None
+    worn_estimated: bool = False  # last_worn is the user's estimate, not a logged wear
     tags: Garment | None
     tag_error: str | None
 
@@ -232,6 +233,31 @@ def list_wardrobe(category: str | None = None, include_hidden: bool = False) -> 
     return [_item_out(i) for i in app.state.store.list_items(include_hidden, category)]
 
 
+class LastWornIn(BaseModel):
+    id: str
+    days_ago: int | None  # None clears the estimate
+
+
+class LastWornBatchIn(BaseModel):
+    items: list[LastWornIn]
+
+
+@app.post("/api/wardrobe/last-worn", response_model=list[ItemOut])
+def set_last_worn(body: LastWornBatchIn) -> list[ItemOut]:
+    """Backfill wear history: "when did you last wear this?" for one or many items. Without it a new
+    closet looks freshly worn, so nothing can be rescued and the closet-alive % means nothing."""
+    store, today = app.state.store, today_local()
+    out = []
+    for e in body.items[:200]:
+        if e.days_ago is not None and not 0 <= e.days_ago <= 3650:
+            raise HTTPException(422, "days_ago must be 0-3650")
+        day = None if e.days_ago is None else (today - timedelta(days=e.days_ago)).isoformat()
+        if not store.set_last_worn_estimate(e.id, day):
+            raise HTTPException(404, f"No such item: {e.id}")
+        out.append(_item_out(store.get_item(e.id)))
+    return out
+
+
 @app.get("/api/wardrobe/{item_id}", response_model=ItemOut)
 def get_item(item_id: str) -> ItemOut:
     item = app.state.store.get_item(item_id)
@@ -282,7 +308,7 @@ def _plan_out(record: dict) -> dict:
     store = app.state.store
     out = {k: record[k] for k in ("id", "day", "created_at", "source", "notes", "weather", "calendar")}
     out["trace"] = {k: v for k, v in record["trace"].items() if k in
-                    ("provider", "model", "tool_calls", "repairs", "seconds", "tokens_in", "tokens_out", "cached", "failures")}
+                    ("provider", "model", "tool_calls", "repairs", "seconds", "tokens_in", "tokens_out", "cached", "failures", "steps")}
     plan = record["plan"]
     out["weather_summary"], out["plans_summary"] = plan["weather_summary"], plan["plans_summary"]
     out["looks"] = []

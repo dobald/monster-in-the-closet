@@ -104,6 +104,11 @@ class Store:
         self._lock = threading.Lock()
         with self._lock:
             self._db.executescript(SCHEMA)
+            # Added after the first release: when last_worn is the user's estimate, not a logged wear.
+            cols = {r[1] for r in self._db.execute("PRAGMA table_info(items)")}
+            if "worn_estimated" not in cols:
+                self._db.execute("ALTER TABLE items ADD COLUMN worn_estimated INTEGER NOT NULL DEFAULT 0")
+                self._db.commit()
 
     # -- items
 
@@ -241,9 +246,23 @@ class Store:
                                  (day, item_id, plan_id, look))
                 self._db.execute(
                     "UPDATE items SET wear_count = wear_count + 1, "
+                    "worn_estimated = CASE WHEN last_worn IS NULL OR last_worn <= ? THEN 0 ELSE worn_estimated END, "
                     "last_worn = CASE WHEN last_worn IS NULL OR last_worn < ? THEN ? ELSE last_worn END WHERE id = ?",
-                    (day, day, item_id),
+                    (day, day, day, item_id),
                 )
+
+    def set_last_worn_estimate(self, item_id: str, day: str | None) -> bool:
+        """The user's answer to "when did you last wear this?". A logged wear that is newer always
+        wins; day=None clears the estimate. Estimates never add to wear_count."""
+        with self._lock, self._db:
+            if not self._db.execute("SELECT 1 FROM items WHERE id = ?", (item_id,)).fetchone():
+                return False
+            real = self._db.execute("SELECT MAX(day) FROM wears WHERE item_id = ?", (item_id,)).fetchone()[0]
+            if day is None or (real and real >= day):
+                self._db.execute("UPDATE items SET last_worn = ?, worn_estimated = 0 WHERE id = ?", (real, item_id))
+            else:
+                self._db.execute("UPDATE items SET last_worn = ?, worn_estimated = 1 WHERE id = ?", (day, item_id))
+            return True
 
     def worn_on(self, day: str) -> list[str]:
         with self._lock:
@@ -328,4 +347,5 @@ def _item(row: sqlite3.Row) -> dict:
     d["tags"] = json.loads(d["tags"]) if d["tags"] else None
     d["is_garment"] = bool(d["is_garment"])
     d["user_edited"] = bool(d["user_edited"])
+    d["worn_estimated"] = bool(d.get("worn_estimated", 0))
     return d

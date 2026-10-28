@@ -317,7 +317,7 @@ def test_gap_math() -> None:
 
 def test_getting_started(var_dir: Path, run_dir: Path) -> None:
     """Fixture mode: the profile drives onboarding, location and the calendar the planner reads."""
-    from datetime import date as d
+    from datetime import date as d, timedelta
     with client_for("fixture", var_dir) as c:
         p = c.get("/api/profile").json()
         assert not p["onboarded"] and p["calendar"] == "sample" and not p["can_plan"] and p["wardrobe"] == {}, p
@@ -346,6 +346,31 @@ def test_getting_started(var_dir: Path, run_dir: Path) -> None:
         assert c.put("/api/profile", json={"onboarded": True}).json()["onboarded"]
         assert c.get("/api/profile").json()["onboarded_at"]
 
+        # Fixture-mode plans carry a rule-picker trace too.
+        kinds = [s["kind"] for s in c.post("/api/plan", json={}).json()["trace"]["steps"]]
+        assert kinds == ["context", "tool", "tool", "rules", "check", "done"], kinds
+
+        # Wear-history backfill: estimates make forgotten clothes visible from day one.
+        items = {i["tags"]["category"]: i for i in c.get("/api/wardrobe").json()}
+        top, bottom = items["top"], items["bottom"]
+        r = c.post("/api/wardrobe/last-worn", json={"items": [{"id": top["id"], "days_ago": 135}]}).json()
+        assert r[0]["worn_estimated"] and r[0]["wear_count"] == top["wear_count"], "an estimate is not a wear"
+        assert r[0]["last_worn"] == (d.today() - timedelta(days=135)).isoformat(), r
+        assert c.get("/api/oni").json()["forgotten"] >= 1
+        plan = c.post("/api/plan", json={}).json()
+        look = next(n for n, lk in enumerate(plan["looks"]) if top["id"] in lk["item_ids"])
+        worn = c.post(f"/api/plans/{plan['id']}/wear", json={"look": look}).json()
+        assert [x["id"] for x in worn["rescued"]] == [top["id"]] and worn["rescued"][0]["days"] == 135, worn["rescued"]
+        after = c.get(f"/api/wardrobe/{top['id']}").json()
+        assert not after["worn_estimated"] and after["last_worn"] == d.today().isoformat(), "a real wear replaces the estimate"
+        r = c.post("/api/wardrobe/last-worn", json={"items": [{"id": top["id"], "days_ago": 300}]}).json()
+        assert r[0]["last_worn"] == d.today().isoformat() and not r[0]["worn_estimated"], "an older guess never hides a logged wear"
+        c.post("/api/wardrobe/last-worn", json={"items": [{"id": bottom["id"], "days_ago": 15}]})
+        r = c.post("/api/wardrobe/last-worn", json={"items": [{"id": bottom["id"], "days_ago": None}]}).json()
+        assert r[0]["last_worn"] in (None, d.today().isoformat()), "clearing an estimate falls back to logged wears"
+        assert c.post("/api/wardrobe/last-worn", json={"items": [{"id": top["id"], "days_ago": 5000}]}).status_code == 422
+        assert c.post("/api/wardrobe/last-worn", json={"items": [{"id": "nope", "days_ago": 3}]}).status_code == 404
+
 
 def test_cut_layer() -> None:
     """A layer is cropped to its garment, and its box says where it sits on the base."""
@@ -363,7 +388,7 @@ def test_cut_layer() -> None:
 def test_agent_loop_and_repair() -> None:
     """plan_with_agent with a scripted client: it must call tools, then repair an invented id."""
     from types import SimpleNamespace as NS
-    from datetime import date as d
+    from datetime import date as d, timedelta
     from closet import planner
     from closet.schema import Look, OutfitPlan
 
@@ -401,6 +426,17 @@ def test_agent_loop_and_repair() -> None:
     assert seen["tools"] == 2 and trace["tool_calls"] == ["get_weather", "get_calendar"], trace
     assert trace["repairs"] == 1 and plan.looks[0].item_ids == ["aaa", "bbb"], (trace, plan)
     assert trace["tokens_in"] == 400 and trace["tokens_out"] == 200, trace
+    # The trace the app shows, in order: both tool calls, the failed check, the repair, the passing check.
+    kinds = [s["kind"] for s in trace["steps"]]
+    assert kinds == ["context", "model", "tool", "tool", "model", "model", "check", "repair", "model", "check", "done"], kinds
+    checks = [s for s in trace["steps"] if s["kind"] == "check"]
+    assert checks[0]["ok"] is False and "not in the wardrobe" in checks[0]["detail"] and checks[1]["ok"] is True, checks
+    assert [s["label"] for s in trace["steps"] if s["kind"] == "tool"] == ["get_weather()", "get_calendar()"]
+    assert all(s.get("thought") is None for s in trace["steps"]), "the fake client returns no reasoning"
+    from closet.planner import tool_summary
+    assert tool_summary("get_calendar", {"events": []}) == "No events today"
+    assert "feels like -2°" in tool_summary("get_weather", {"parts": {"morning": {"temp_c": [2, 8], "feels_like_low_c": -2,
+                                                                                    "rain_chance_pct": 5, "sky": "clear"}}})
 
 
 def test_duplicates(var_dir: Path) -> None:

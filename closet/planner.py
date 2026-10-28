@@ -120,16 +120,32 @@ def plan_with_agent(
     tool_impls: dict[str, Callable[[], dict]],
     provider: str,
 ) -> tuple[OutfitPlan, dict]:
-    """Tool-calling loop on `provider`, then a structured final answer, then validation/repair."""
+    """Tool-calling loop on `provider`, then a structured final answer, then validation/repair.
+
+    Every step is recorded in trace["steps"] (what the model did, which tools it called and
+    what they returned, every check and repair) so the app can show how the oni decided.
+    """
     client = config.client_for(provider)
     model = config.PLAN_MODEL[provider]
-    trace = {"provider": provider, "model": model, "tool_calls": [], "repairs": 0, "tokens_in": 0, "tokens_out": 0}
+    who = MODEL_NAMES.get(provider, model)
+    trace = {"provider": provider, "model": model, "tool_calls": [], "repairs": 0, "tokens_in": 0, "tokens_out": 0,
+             "steps": []}
     t0 = time.time()
 
-    def count(resp) -> None:
+    def count(resp) -> int:
         if resp.usage:
             trace["tokens_in"] += resp.usage.prompt_tokens
             trace["tokens_out"] += resp.usage.completion_tokens
+            return resp.usage.completion_tokens
+        return 0
+
+    def step(kind: str, label: str, detail: str = "", **extra) -> None:
+        trace["steps"].append({"kind": kind, "label": label, "detail": detail, **extra})
+
+    worn_known = sum(1 for i in items if i.get("last_worn"))
+    step("context", "Reads your closet",
+         f"{len(items)} garments ({worn_known} with wear history) · {len(prefs)} learned preference{'s' if len(prefs) != 1 else ''}"
+         + (f" · your note: “{notes}”" if notes else ""))
 
     system = (f"{PERSONA}\n\n{RULES}\n\nWardrobe ({len(items)} garments):\n{wardrobe_lines(items, today)}\n\n"
               f"Learned preferences:\n{preference_lines(prefs)}")
@@ -140,11 +156,16 @@ def plan_with_agent(
 
     called: set[str] = set()
     for _ in range(4):  # a couple of tool rounds is plenty; bound it so a loop can't burn credits
+        t = time.time()
         resp = client.chat.completions.create(
             model=model, messages=messages, tools=TOOL_SPECS, reasoning_effort="medium", max_tokens=6000,
         )
-        count(resp)
+        out_tokens = count(resp)
         msg = resp.choices[0].message
+        wants = [tc.function.name for tc in (msg.tool_calls or [])]
+        step("model", f"{who} plans its next move",
+             f"Calls {', '.join(w + '()' for w in wants)}" if wants else "Has what it needs",
+             thought=_thought(msg), ms=round((time.time() - t) * 1000), tokens=out_tokens)
         if not msg.tool_calls:
             break
         messages.append({"role": "assistant", "content": msg.content or "", "tool_calls": [
@@ -153,43 +174,120 @@ def plan_with_agent(
         ]})
         for tc in msg.tool_calls:
             fn = tool_impls.get(tc.function.name)
+            t = time.time()
             result = fn() if fn else {"error": f"unknown tool {tc.function.name}"}
             called.add(tc.function.name)
             trace["tool_calls"].append(tc.function.name)
+            step("tool", f"{tc.function.name}()", tool_summary(tc.function.name, result), ms=round((time.time() - t) * 1000))
             messages.append({"role": "tool", "tool_call_id": tc.id, "content": json.dumps(result)})
 
     # Never plan blind: if the model skipped a tool, give it the data anyway.
     for name, fn in tool_impls.items():
         if name not in called:
-            messages.append({"role": "user", "content": f"(For reference, {name} returns: {json.dumps(fn())})"})
+            result = fn()
+            messages.append({"role": "user", "content": f"(For reference, {name} returns: {json.dumps(result)})"})
             trace["tool_calls"].append(f"{name} (injected)")
+            step("tool", f"{name}()", tool_summary(name, result) + " · added for the model, which skipped it")
 
     final_ask = {"role": "user", "content": "Now return exactly three looks as JSON. Use only wardrobe ids from the list. "
                                             + VOICE}
-    plan = _parse_plan(client, model, messages + [final_ask], count)
-    errors = validate_plan(plan, items)
-    problems = errors + variety_problems(plan, items)
-    if problems:
+
+    def parse(msgs: list[dict], label: str) -> OutfitPlan:
+        t = time.time()
+        plan, out_tokens = _parse_plan(client, model, msgs, count)
+        step("model", label, f"{len(plan.looks)} looks: " + " · ".join(look.name for look in plan.looks[:3]),
+             ms=round((time.time() - t) * 1000), tokens=out_tokens)
+        return plan
+
+    def check(plan: OutfitPlan) -> tuple[list[str], list[str]]:
+        errors, variety = validate_plan(plan, items), variety_problems(plan, items)
+        ids = sum(len(look.item_ids) for look in plan.looks[:3])
+        step("check", "Checks every look against your real closet",
+             " ".join(errors) if errors else f"All {ids} item ids exist · every look has a top + bottom (or a dress)",
+             ok=not errors)
+        if variety:
+            step("check", "Checks the looks are different enough", " ".join(variety), ok=False)
+        return errors, variety
+
+    plan = parse(messages + [final_ask], f"{who} writes the plan as structured output")
+    errors, variety = check(plan)
+    if errors or variety:
         trace["repairs"] = 1
+        step("repair", "Sends the problems back for a repair round", " ".join(errors + variety))
         repair = messages + [final_ask, {"role": "assistant", "content": plan.model_dump_json()},
-                             {"role": "user", "content": "That plan has problems: " + " ".join(problems) + " Return a corrected plan."}]
-        fixed = _parse_plan(client, model, repair, count)
-        fixed_errors = validate_plan(fixed, items)
+                             {"role": "user", "content": "That plan has problems: " + " ".join(errors + variety) + " Return a corrected plan."}]
+        fixed = parse(repair, f"{who} returns a corrected plan")
+        fixed_errors, _ = check(fixed)
         if not fixed_errors:
             plan = fixed
         elif errors:  # a broken plan we couldn't fix; a merely repetitive one is still usable
             raise ValueError("plan still invalid after repair: " + " ".join(fixed_errors))
     plan.looks = plan.looks[:3]
+    by_id = {i["id"]: i for i in items}
+    rescued = [by_id[look.rediscovered_id]["tags"]["subtype"] for look in plan.looks
+               if look.rediscovered_id and look.rediscovered_id in by_id]
     trace["seconds"] = round(time.time() - t0, 1)
+    step("done", "Plan ready", f"{len(plan.looks)} looks" + (f" · rescues your {rescued[0]}" if rescued else ""),
+         ms=round(trace["seconds"] * 1000))
     return plan, trace
 
 
-def _parse_plan(client, model: str, messages: list[dict], count) -> OutfitPlan:
+MODEL_NAMES = {"baseten": "Muse Spark Open", "meta": "Muse Spark 1.3"}
+
+
+def rule_steps(items: list[dict], prefs: list[dict], weather: dict, calendar: dict, notes: str, plan: OutfitPlan,
+               why: str) -> list[dict]:
+    """The same kind of trace for the rule-based picker, so the app can always show how a plan was made."""
+    errors = validate_plan(plan, items)
+    return [
+        {"kind": "context", "label": "Reads your closet", "detail": f"{len(items)} garments · {len(prefs)} learned preferences"
+         + (f" · your note: “{notes}”" if notes else "")},
+        {"kind": "tool", "label": "get_weather()", "detail": tool_summary("get_weather", weather)},
+        {"kind": "tool", "label": "get_calendar()", "detail": tool_summary("get_calendar", calendar)},
+        {"kind": "rules", "label": "Rule picker", "detail": f"{why}. Warmth from the coldest feels-like, formality from "
+         "today's events, forgotten pieces first."},
+        {"kind": "check", "label": "Checks every look against your real closet",
+         "detail": " ".join(errors) or "Every look uses real items", "ok": not errors},
+        {"kind": "done", "label": "Plan ready", "detail": f"{len(plan.looks)} looks"},
+    ]
+
+
+def _thought(msg) -> str | None:
+    """A short excerpt of the model's reasoning, when the provider returns it."""
+    extra = getattr(msg, "model_extra", None) or {}
+    text = getattr(msg, "reasoning_content", None) or extra.get("reasoning_content") or extra.get("reasoning")
+    if not isinstance(text, str) or not text.strip():
+        return None
+    text = " ".join(text.split())
+    return text[:260] + ("…" if len(text) > 260 else "")
+
+
+def tool_summary(name: str, result: dict) -> str:
+    """One readable line for what a tool returned."""
+    if name == "get_weather":
+        parts = result.get("parts") or {}
+        if not parts:
+            return "No forecast"
+        temps = [t for p in parts.values() for t in p["temp_c"]]
+        coldest = min(p["feels_like_low_c"] for p in parts.values())
+        rain = max(p["rain_chance_pct"] for p in parts.values())
+        skies = ", ".join(dict.fromkeys(p["sky"] for p in parts.values()))
+        return f"{min(temps)}–{max(temps)}°C · feels like {coldest}° at the coldest · rain up to {rain}% · {skies}"
+    if name == "get_calendar":
+        events = result.get("events") or []
+        if not events:
+            return "No events today"
+        return " · ".join(f"{e.get('start', '')} {e.get('title', '')}" + (f" ({e['dress_code']})" if e.get("dress_code") else "")
+                          for e in events)
+    return json.dumps(result)[:160]
+
+
+def _parse_plan(client, model: str, messages: list[dict], count) -> tuple[OutfitPlan, int]:
     resp = client.chat.completions.parse(
         model=model, messages=messages, response_format=OutfitPlan, reasoning_effort="low", max_tokens=4000,
     )
-    count(resp)
-    return resp.choices[0].message.parsed
+    tokens = count(resp)
+    return resp.choices[0].message.parsed, tokens
 
 
 # ---------------------------------------------------------------- rules (fixture mode and last-resort fallback)
