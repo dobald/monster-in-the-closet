@@ -71,6 +71,7 @@ export interface Plan {
     model?: string;
     seconds?: number;
     cached?: boolean;
+    prebuilt?: boolean; // made ahead of time, after a wear or check-in
     tokens_in?: number;
     tokens_out?: number;
     repairs?: number;
@@ -133,6 +134,7 @@ export interface Oni {
   mood: Mood;
   closet_alive_pct: number;
   garments: number;
+  has_history: boolean; // any logged or estimated wear: without one the % is meaningless and hidden
   forgotten: number;
   streak_days: number;
 }
@@ -318,20 +320,33 @@ export class ApiError extends Error {
   }
 }
 
+// On a server with a closet per device, the first response hands this browser its closet cookie.
+// Ask once, before anything else, so the parallel requests of the first page load don't each get a new closet.
+let handshake: Promise<unknown> | null = null;
+
 async function call<T>(path: string, init?: RequestInit): Promise<T> {
   let res: Response;
   try {
+    if (path !== "/api/closet") await (handshake ??= fetch("/api/closet").catch(() => null));
     res = await fetch(path, init);
   } catch {
-    throw new ApiError(0, "Can't reach the closet server. Is the API running?");
+    throw new ApiError(0, "The oni can't reach your closet right now. Check your connection and try again.");
   }
   if (res.status === 204) return undefined as T;
   const body = await res.json().catch(() => null);
   if (!res.ok) {
     const detail = body?.detail;
-    throw new ApiError(res.status, typeof detail === "string" ? detail : `Request failed (${res.status})`);
+    throw new ApiError(res.status, typeof detail === "string" ? detail : friendly(res.status));
   }
   return body as T;
+}
+
+// When the server sends no explanation (it's down, restarting, or crashed), say so in plain words, never "500".
+function friendly(status: number): string {
+  if (status === 502 || status === 503 || status === 504 || status === 500)
+    return "The oni's having a nap. Give it a moment, then try again.";
+  if (status === 413) return "That photo is too big. Try a smaller one.";
+  return "Something went wrong on the oni's side. Try again in a moment.";
 }
 
 const json = (method: string, body?: unknown): RequestInit => ({
@@ -395,6 +410,10 @@ export const api = {
     call<{ new: boolean }>("/api/preferences", json("POST", { text, applies_when: applies_when ?? null })),
   preferences: () => call<Preference[]>("/api/preferences"),
   forget: (id: number) => call<void>(`/api/preferences/${id}`, { method: "DELETE" }),
+  closet: () => call<{ per_device: boolean; id: string }>("/api/closet"),
+  openCloset: (id: string) => call<{ id: string }>("/api/closet/open", json("POST", { id })),
+  newCloset: () => call<{ id: string }>("/api/closet/new", { method: "POST" }),
+  loadSample: () => call<{ imported: number }>("/api/closet/sample", { method: "POST" }),
   scan: (photos: File[]) => {
     const form = new FormData();
     photos.forEach((p) => form.append("photos", p, p.name));

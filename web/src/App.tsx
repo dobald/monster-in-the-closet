@@ -11,6 +11,7 @@ import ItemSheet from "./screens/ItemSheet";
 import TryOn from "./screens/TryOn";
 import Onboarding from "./screens/Onboarding";
 import Oni from "./Oni";
+import { setView as saveView, viewFromUrl, type View } from "./view";
 
 export type Tab = "today" | "closet" | "scan" | "thrift" | "notes";
 
@@ -36,6 +37,8 @@ export interface AppCtx {
   wardrobeVersion: number;
   bumpWardrobe: () => void;
   refreshKey: number; // bumps whenever an overlay closes, so screens behind it can re-read settings
+  view: View; // simple: one look, the rest under "More"; full: everything open, for judges and demos
+  setView: (v: View) => void;
 }
 
 export default function App() {
@@ -49,8 +52,20 @@ export default function App() {
   // First run shows getting started instead of the tabs; "edit" reopens it from Notes.
   const [onboarding, setOnboarding] = useState<"checking" | "first" | "edit" | null>("checking");
 
+  const [view, setView] = useState<View>(viewFromUrl);
+
   useEffect(() => {
-    api.profile().then((p) => setOnboarding(p.onboarded ? null : "first")).catch(() => setOnboarding(null));
+    // "Open on another device" links carry ?closet=<id>: move this browser to that closet first.
+    const url = new URL(window.location.href);
+    const linked = url.searchParams.get("closet");
+    if (linked) {
+      url.searchParams.delete("closet");
+      window.history.replaceState(null, "", url.pathname + url.search + url.hash);
+    }
+    (linked ? api.openCloset(linked).then(() => setToastMsg("Opened your closet on this device.")).catch((e) => setToastMsg((e as Error).message)) : Promise.resolve())
+      .then(() => api.profile())
+      .then((p) => setOnboarding(p.onboarded ? null : "first"))
+      .catch(() => setOnboarding(null));
   }, []);
 
   const refreshOni = useCallback(() => {
@@ -85,6 +100,11 @@ export default function App() {
     wardrobeVersion,
     bumpWardrobe: () => setWardrobeVersion((v) => v + 1),
     refreshKey,
+    view,
+    setView: (v) => {
+      saveView(v);
+      setView(v);
+    },
   };
 
   const close = () => {

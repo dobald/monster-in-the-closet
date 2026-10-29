@@ -179,7 +179,9 @@ function Hello({ profile, onNext }: { profile: Profile; onNext: () => void }) {
         <button type="button" className="btn primary press block" style={{ height: 54 }} onClick={onNext}>
           Let's get started →
         </button>
-        <span className="small muted" style={{ textAlign: "center" }}>About 3 minutes. No photo of you is ever needed.</span>
+        <span className="small muted" style={{ textAlign: "center" }}>
+          About 3 minutes with a few photos, or 1 minute with the sample closet. No photo of you is ever needed.
+        </span>
       </Footer>
     </>
   );
@@ -390,6 +392,20 @@ function ClosetStep({ profile, ctx, onChange, onNext }: { profile: Profile; ctx:
     }
   };
 
+  const sample = async () => {
+    setBusy(true);
+    try {
+      await api.loadSample();
+      ctx.bumpWardrobe();
+      onChange();
+      ctx.toast("Loaded 9 sample pieces. Some haven't been worn in months, so there's plenty to rescue.");
+    } catch (e) {
+      ctx.toast((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <>
       <Title en="FEED ME CLOTHES" ja="服をちょうだい" sub="Photograph your clothes laid flat, a few at a time. I find each piece and learn what it is." />
@@ -418,7 +434,10 @@ function ClosetStep({ profile, ctx, onChange, onNext }: { profile: Profile; ctx:
           {!!scan.duplicates?.merged.length && <span className="small">{scan.duplicates.merged.length} were already in your closet, so I merged them.</span>}
         </div>
       ) : (
-        <FlatLayGuide />
+        <>
+          <FlatLayGuide />
+          <DataNote />
+        </>
       )}
 
       {total > 0 && (
@@ -442,6 +461,11 @@ function ClosetStep({ profile, ctx, onChange, onNext }: { profile: Profile; ctx:
             {total ? "Scan another batch" : "Take or choose photos"}
           </button>
         )}
+        {!total && !files.length && (
+          <button type="button" className="btn press block" style={{ height: 52 }} disabled={busy} onClick={sample}>
+            No clothes handy? Try a sample closet
+          </button>
+        )}
         {profile.can_plan ? (
           <button type="button" className="btn primary press block" style={{ height: 52 }} disabled={busy} onClick={onNext}>
             Next →
@@ -456,6 +480,22 @@ function ClosetStep({ profile, ctx, onChange, onNext }: { profile: Profile; ctx:
         )}
       </Footer>
     </>
+  );
+}
+
+// What happens to the photos, said up front for testers trying a friend's build.
+export function DataNote() {
+  const [perDevice, setPerDevice] = useState<boolean | null>(null);
+  useEffect(() => {
+    api.closet().then((c) => setPerDevice(c.per_device)).catch(() => {});
+  }, []);
+  return (
+    <p className="small muted" style={{ margin: 0, lineHeight: 1.5 }}>
+      <strong>Your photos:</strong> Meta's AI models (SAM 3.1 and Muse Spark) cut out and tag each piece.{" "}
+      {perDevice
+        ? "The cutouts stay on this app's server, in a closet only your device can open. Nobody else sees them."
+        : "The cutouts are kept on the computer running this app, in one shared closet."}
+    </p>
   );
 }
 

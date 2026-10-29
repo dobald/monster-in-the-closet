@@ -276,6 +276,17 @@ New scans are dressed in the background, and Notes has "Dress the mannequin with
 
 The phone and the computer must be on the same Wi-Fi.
 
+**When friends test, give everyone their own closet.** By default there is one closet for whoever opens the app. With `--devices`, every browser gets its own:
+
+```bash
+python -m server.dev --live --devices --var var/testers    # one closet per phone, apart from your own var/
+```
+
+- **Separate folders.** Each closet's database, cutouts, renders, try-on photo and calendar live in `var/testers/closets/<id>/`. A cookie picks the closet. The model cache is shared, since it is keyed by content hashes.
+- **Moving between devices.** Notes → **Your closet** has "Open on another device", a private link that opens the same closet on a second phone. "Start a new closet" begins again from empty.
+- **Limits.** The var/ root is never reachable as a closet. Fixture mode never replays one closet's scans into another. `MONSTER_MAX_CLOSETS` (default 200) caps how many can be created.
+- **Launch configs.** In the Claude desktop app, `api-testers` runs this live and `api-devices` runs it in fixture mode.
+
 ```bash
 python -m server.dev --live                 # API in live mode: real models, every result cached
 cd web && npm run dev:lan                   # front end, reachable from the phone
@@ -295,6 +306,8 @@ The first time the app opens, it walks through seven short steps and saves as it
 2. **Where are you?** City search using Open-Meteo geocoding (free, no key), or "Use my location" where the browser allows it. There's an optional "I run cold / warm" choice, which seeds a preference the planner reads from day one.
 3. **What's on?** Upload an `.ics` export from Google or Apple Calendar, use the demo calendar, or skip. Only event titles, times and places are read, and the file stays in `var/private/`.
 4. **Feed me clothes:** a flat-lay guide (4–8 pieces, no overlaps, print side up), then scanning in batches. **Next** unlocks once there's at least a top and a bottom, or a dress.
+   - A short note says where the photos go.
+   - **No clothes handy? Try a sample closet** loads 9 made-up pieces instead, some unworn for months, so there is something to rescue straight away.
 5. **When did you last wear these?** A rough answer per piece, so forgotten clothes are visible from day one.
 6. **Who wears it?** The try-on setup, which can be skipped. Choosing the mannequin starts dressing your whole closet in the background.
 7. **Your first pick:** a real plan for today, with your weather and calendar. "See my day" finishes setup.
@@ -307,6 +320,18 @@ Notes → **Your setup** reopens the flow from step 2, to change your city or ca
 | `POST` / `DELETE /api/profile/calendar` | Upload an `.ics` (checked for events, max 2 MB), or remove it |
 | `GET /api/geocode?q=` | City search for the weather location |
 | `POST /api/preferences` | A preference the user states directly, stored like learned ones |
+| `GET /api/closet` | Which closet this browser is on (`per_device`, `id`) |
+| `POST /api/closet/open` · `/new` · `/sample` | Open a closet from its link, start a fresh one, or load the sample closet |
+
+**The sample closet** is `fixtures/sample_closet/`. None of it is anyone's real clothes:
+- `scripts/make_sample_closet.py` has Muse Image draw two flat-lay photos.
+- The app's own scan path (SAM 3.1 cutouts, then Muse Spark tags) turns them into 9 items, for about 5 cents.
+- Each piece ships with an estimated last-worn date.
+
+**Small closets.**
+- A closet that can't make an outfit yet gets a message naming what to scan next, for example "I need at least one bottom", instead of failing.
+- One top and one bottom make one look, not three copies of it.
+- A closet of only dresses works too.
 
 ## Front end (mobile web)
 
@@ -318,7 +343,12 @@ cd web && npm install && npm run dev    # terminal 2 → http://localhost:5173
 ```
 
 Screens:
-- **Today:** the oni's three looks as a cutout collage on riso halftone, with weather and calendar on a ticker. Chips (Warmer, Dressier, No black) re-plan with notes.
+- **Today:** the oni's looks as a cutout collage on riso halftone, with weather and calendar on a ticker.
+  - By default it shows one look with **Wear this** and **Next look**.
+  - Finishing touches, the colour read, "Got one?", the adjust chips (Warmer, Dressier, No black, Re-roll) and "How the oni decided" sit under **More**.
+  - Notes → **Today view → Everything** keeps all of that open and names the models at work. Opening the app with `?view=full` does the same; this is the view for judges and demos.
+  - The closet-alive % stays hidden until there is some wear history behind it.
+  - **Plans are made ahead.** After a wear or an evening check-in, tomorrow's plan is built in the background, so the morning opens on it instead of waiting about 15s. If the closet changes after that plan was made, it is dropped and a fresh one is made.
 - **Worn it!:** confetti, the fed oni, the 救 stamp for rescued pieces, closet-alive change and streak.
 - **Evening check-in:** temperature, feeling, tags and a note; shows the oni's reply and what it learned.
 - **Closet:** a searchable, filterable pinboard grid, with an item sheet showing tags and a remove action.
@@ -367,6 +397,7 @@ Offline self-test (no API calls): `python tests/test_offline.py`
   - **Text only → Baseten (Muse Spark Open), for the morning plan and check-ins.** This is garment tags, today's weather, calendar event titles and times, and check-in answers. No images.
   - **Renders → Meta's Muse Image.** This includes your photo only if you chose the face version.
 - **Never sent to Meta's "contributor" models,** which may use inputs for training.
+- **Testers' closets are kept apart.** With `--devices`, each phone's photos, cutouts and renders stay in its own closet folder, and the app says so before the first scan.
 - **Local files stay out of git.** Closet footage, selfies and renders live in `data/` and `out/`. Both folders are git-ignored and never committed. This repo is public.
 
 Spike try-on examples:

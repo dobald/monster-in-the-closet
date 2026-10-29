@@ -5,6 +5,11 @@ MONSTER_MODE
                       earlier live calls; an unseen photo replays a recorded scan.
                       Use this for front-end work: zero credits.
   live              - calls SAM 3.1 and Muse Spark, and records every result to the cache.
+
+MONSTER_CLOSETS
+  single (default)  - one closet for everyone, in MONSTER_VAR_DIR. Fine on your own laptop.
+  device            - every browser gets its own closet under var/closets/<id>/, picked by a
+                      cookie. Use this whenever anyone else opens the app (testers, a hosted demo).
 """
 
 from __future__ import annotations
@@ -16,12 +21,15 @@ from pathlib import Path
 from closet import config
 
 MODES = ("fixture", "live")
+CLOSET_MODES = ("single", "device")
 
 
 @dataclass(frozen=True)
 class Settings:
     mode: str
-    var_dir: Path
+    var_dir: Path  # this closet's own files: database, cutouts, renders, private uploads
+    shared_dir: Path | None = None  # what every closet shares (the model cache); defaults to var_dir
+    closets: str = "single"
 
     @property
     def live(self) -> bool:
@@ -37,14 +45,26 @@ class Settings:
 
     @property
     def cache_dir(self) -> Path:
-        return self.var_dir / "cache"
+        return (self.shared_dir or self.var_dir) / "cache"
+
+    @property
+    def per_device(self) -> bool:
+        return self.closets == "device"
 
 
 def load() -> Settings:
     mode = os.environ.get("MONSTER_MODE", "fixture").strip().lower()
     if mode not in MODES:
         raise SystemExit(f"MONSTER_MODE must be one of {MODES}, got {mode!r}")
+    closets = os.environ.get("MONSTER_CLOSETS", "single").strip().lower()
+    if closets not in CLOSET_MODES:
+        raise SystemExit(f"MONSTER_CLOSETS must be one of {CLOSET_MODES}, got {closets!r}")
     var_dir = Path(os.environ.get("MONSTER_VAR_DIR", config.ROOT / "var")).resolve()
-    for d in (var_dir, var_dir / "cutouts", var_dir / "cache"):
+    s = Settings(mode=mode, var_dir=var_dir, shared_dir=var_dir, closets=closets)
+    prepare(s)
+    return s
+
+
+def prepare(s: Settings) -> None:
+    for d in (s.var_dir, s.cutout_dir, s.cache_dir):
         d.mkdir(parents=True, exist_ok=True)
-    return Settings(mode=mode, var_dir=var_dir)

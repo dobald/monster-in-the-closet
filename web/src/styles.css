@@ -278,9 +278,11 @@ img { display: block; max-width: 100%; }
 .toast {
   position: fixed;
   z-index: 60;
-  left: 50%;
+  /* Centred with margins, not translateX: the rise animation ends on transform: none. */
+  left: 0;
+  right: 0;
+  margin: 0 auto;
   bottom: calc(var(--tabbar-h) + 16px);
-  transform: translateX(-50%);
   max-width: 380px;
   width: calc(100% - 32px);
   padding: 10px 14px;

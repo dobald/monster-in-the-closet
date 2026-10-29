@@ -25,6 +25,7 @@ from .settings import Settings
 from .store import Store, now
 
 TAG_CONCURRENCY = 8
+SAMPLE_DIR = config.ROOT / "fixtures" / "sample_closet"
 
 
 class FixtureMissing(RuntimeError):
@@ -68,7 +69,13 @@ class Pipeline:
                     "Fixture mode has no recorded scans yet. Run one scan with MONSTER_MODE=live, "
                     "or POST /api/dev/seed with a spike run folder."
                 )
-            replay = self.cache.get("scans", recorded[int(key, 16) % len(recorded)])
+            # Only replay scans whose cutouts this closet holds: another device's clothes never leak in.
+            mine = [r for r in (self.cache.get("scans", k) for k in recorded) if r and r["kept"] and all(
+                (self.settings.cutout_dir / f"{i['item_id']}.png").exists() for i in r["kept"])]
+            if not mine:
+                raise FixtureMissing("Fixture mode has nothing recorded for this closet. Load the sample closet, "
+                                     "or run with MONSTER_MODE=live.")
+            replay = mine[int(key, 16) % len(mine)]
             return PhotoResult(source, replay["kept"], [{"source": source, "reason": r} for r in replay["dropped"]],
                                cached=True, replayed=True)
 
@@ -141,6 +148,34 @@ class Pipeline:
         }
         self.store.add_scan(record)
         return {**record, "duplicates": dupes}
+
+    # -- the sample closet (fixtures/sample_closet, made by scripts/make_sample_closet.py)
+
+    def load_sample(self, today) -> dict:
+        """Fill this closet with the made-up sample closet, so someone can try the app without scanning.
+
+        Each piece gets an estimated last-worn date, so there are forgotten pieces to rescue straight away.
+        Loading twice is harmless: items are keyed by their cutout.
+        """
+        import json
+        from datetime import timedelta
+
+        rows = json.loads((SAMPLE_DIR / "closet.json").read_text(encoding="utf-8"))
+        ids = []
+        for r in rows:
+            png = (SAMPLE_DIR / f"{r['id']}.png").read_bytes()
+            (self.settings.cutout_dir / f"{r['id']}.png").write_bytes(png)
+            garment = Garment.model_validate(r["tags"])
+            self.cache.put("tags", tag_key(png), garment.model_dump())
+            self.store.upsert_item(r["id"], "sample", "sample closet", None, garment, None)
+            self.store.set_last_worn_estimate(r["id"], (today - timedelta(days=r["idle_days"])).isoformat())
+            ids.append(r["id"])
+        # Replayable in fixture mode, like any recorded scan.
+        self.cache.put("scans", sha256(b"sample-closet"), {"source": "sample closet", "dropped": [], "version": "sample",
+                                                         "kept": [{"item_id": i, "confidence": None} for i in ids]})
+        self.store.add_scan({"id": f"sample-{uuid.uuid4().hex[:6]}", "created_at": now(), "mode": "sample", "seconds": 0,
+                             "photos": 0, "cached_photos": 0, "replayed": False, "item_ids": ids, "dropped": []})
+        return {"imported": len(ids)}
 
     # -- dev: import a spike run as fixtures
 

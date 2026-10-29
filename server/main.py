@@ -8,12 +8,13 @@ Interactive docs at http://127.0.0.1:8000/docs
 
 from __future__ import annotations
 
+import os
 from contextlib import asynccontextmanager
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Any, Literal
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel, ValidationError
@@ -23,12 +24,10 @@ from closet.schema import Garment
 
 from . import settings as settings_mod
 from .cache import Cache
-from .pipeline import FixtureMissing, Pipeline
-from .planning import Planning, today_local
-from .store import Store
+from .closets import MAIN, SCOPE_KEY, Closet, ClosetMiddleware, Closets, ClosetsFull, current_id
+from .pipeline import FixtureMissing
+from .planning import today_local
 from .examples import Examples
-from .layers import Layers
-from .tryon import TryOn
 
 MAX_PHOTOS = 10
 MAX_PHOTO_BYTES = 25 * 1024 * 1024
@@ -125,18 +124,23 @@ class CheckinIn(BaseModel):
 async def lifespan(app: FastAPI):
     s = settings_mod.load()
     cache = Cache(s.cache_dir)
-    store = Store(s.db_path)
-    app.state.settings, app.state.store = s, store
-    app.state.pipeline = Pipeline(s, cache, store)
-    app.state.planning = Planning(s, cache, store)
-    app.state.tryon = TryOn(s, cache, store)
-    app.state.examples = Examples(s)
-    app.state.layers = Layers(s, store)
+    app.state.settings, app.state.cache = s, cache
+    app.state.closets = Closets(s, cache, int(os.environ.get("MONSTER_MAX_CLOSETS", "200")))
+    app.state.examples = Examples(s)  # thrift example photos are generic, so every closet shares them
     yield
 
 
 app = FastAPI(title="Monster in the Closet API", version="0.1.0", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(ClosetMiddleware)  # added last, so it runs first
+
+
+def C() -> Closet:
+    """The closet this request belongs to (see server/closets.py)."""
+    try:
+        return app.state.closets.get(current_id())
+    except ClosetsFull as e:
+        raise HTTPException(503, str(e))
 
 
 def _item_out(d: dict) -> ItemOut:
@@ -153,7 +157,7 @@ def root() -> RedirectResponse:
 @app.get("/api/health")
 def health() -> dict:
     s = app.state.settings
-    return {"ok": True, "mode": s.mode, "tag_model": config.TAG_MODEL[config.TAG_PROVIDER], **app.state.store.counts()}
+    return {"ok": True, "mode": s.mode, "tag_model": config.TAG_MODEL[config.TAG_PROVIDER], **C().store.counts()}
 
 
 @app.post("/api/scans", response_model=ScanOut)
@@ -169,17 +173,17 @@ async def create_scan(photos: list[UploadFile] = File(..., description="1-10 fla
             raise HTTPException(415, f"{f.filename}: send JPEG, PNG, WebP or HEIC photos.")
         batch.append((f.filename or f"photo{len(batch)}", data))
     try:
-        record = await app.state.pipeline.run_scan(batch)
+        record = await C().pipeline.run_scan(batch)
     except FixtureMissing as e:
         raise HTTPException(409, str(e))
-    store = app.state.store
+    store = C().store
     items = [store.get_item(i) for i in record["item_ids"]]
     return ScanOut(**{k: v for k, v in record.items() if k not in ("item_ids", "duplicates")},
                    items=[_item_out(i) for i in items if i], duplicates=_dupes_out(record["duplicates"]))
 
 
 def _dupes_out(d: dict) -> DuplicatesOut:
-    store = app.state.store
+    store = C().store
     merged = [MergedOut(kept=_item_out(k), dropped_id=m["dropped_id"], confidence=m["confidence"], reason=m["reason"])
               for m in d["merged"] if (k := store.get_item(m["kept_id"]))]
     review = []
@@ -194,19 +198,19 @@ def _dupes_out(d: dict) -> DuplicatesOut:
 @app.post("/api/wardrobe/duplicates/check", response_model=DuplicatesOut)
 async def check_duplicates() -> DuplicatesOut:
     """Look for the same garment scanned more than once. Confident matches merge; unsure ones come back for review."""
-    return _dupes_out(await app.state.pipeline.dedupe.check())
+    return _dupes_out(await C().pipeline.dedupe.check())
 
 
 @app.post("/api/wardrobe/duplicates/merge", response_model=ItemOut)
 def merge_duplicates(body: PairIn) -> ItemOut:
     """The user confirmed two items are one garment: keep the better cutout, fold in the other's wear history."""
-    store = app.state.store
+    store = C().store
     a, b = store.get_item(body.a), store.get_item(body.b)
     if not a or not b:
         raise HTTPException(404, "No such item.")
     if a["id"] == b["id"]:
         return _item_out(a)
-    keep, drop = app.state.pipeline.dedupe.keep_drop(a, b)
+    keep, drop = C().pipeline.dedupe.keep_drop(a, b)
     store.merge_items(keep["id"], drop["id"])
     return _item_out(store.get_item(keep["id"]))
 
@@ -214,12 +218,12 @@ def merge_duplicates(body: PairIn) -> ItemOut:
 @app.post("/api/wardrobe/duplicates/distinct", status_code=204)
 def not_duplicates(body: PairIn) -> None:
     """The user says these are two different items: never suggest the pair again."""
-    app.state.store.mark_distinct(body.a, body.b)
+    C().store.mark_distinct(body.a, body.b)
 
 
 @app.get("/api/scans/{scan_id}", response_model=ScanOut)
 def get_scan(scan_id: str) -> ScanOut:
-    store = app.state.store
+    store = C().store
     record = store.get_scan(scan_id)
     if not record:
         raise HTTPException(404, "No such scan.")
@@ -230,7 +234,7 @@ def get_scan(scan_id: str) -> ScanOut:
 @app.get("/api/wardrobe", response_model=list[ItemOut])
 def list_wardrobe(category: str | None = None, include_hidden: bool = False) -> list[ItemOut]:
     """Garments in the wardrobe. Cutouts tagged as not-a-garment are hidden unless include_hidden."""
-    return [_item_out(i) for i in app.state.store.list_items(include_hidden, category)]
+    return [_item_out(i) for i in C().store.list_items(include_hidden, category)]
 
 
 class LastWornIn(BaseModel):
@@ -246,7 +250,7 @@ class LastWornBatchIn(BaseModel):
 def set_last_worn(body: LastWornBatchIn) -> list[ItemOut]:
     """Backfill wear history: "when did you last wear this?" for one or many items. Without it a new
     closet looks freshly worn, so nothing can be rescued and the closet-alive % means nothing."""
-    store, today = app.state.store, today_local()
+    store, today = C().store, today_local()
     out = []
     for e in body.items[:200]:
         if e.days_ago is not None and not 0 <= e.days_ago <= 3650:
@@ -260,7 +264,7 @@ def set_last_worn(body: LastWornBatchIn) -> list[ItemOut]:
 
 @app.get("/api/wardrobe/{item_id}", response_model=ItemOut)
 def get_item(item_id: str) -> ItemOut:
-    item = app.state.store.get_item(item_id)
+    item = C().store.get_item(item_id)
     if not item:
         raise HTTPException(404, "No such item.")
     return _item_out(item)
@@ -269,7 +273,7 @@ def get_item(item_id: str) -> ItemOut:
 @app.patch("/api/wardrobe/{item_id}", response_model=ItemOut)
 def fix_tags(item_id: str, changes: dict[str, Any]) -> ItemOut:
     """The 'Fix tags' button: merge the user's corrections into the item's tags."""
-    store = app.state.store
+    store = C().store
     item = store.get_item(item_id)
     if not item:
         raise HTTPException(404, "No such item.")
@@ -288,16 +292,16 @@ def fix_tags(item_id: str, changes: dict[str, Any]) -> ItemOut:
 
 @app.delete("/api/wardrobe/{item_id}", status_code=204)
 def delete_item(item_id: str) -> None:
-    if not app.state.store.delete_item(item_id):
+    if not C().store.delete_item(item_id):
         raise HTTPException(404, "No such item.")
-    (app.state.settings.cutout_dir / f"{item_id}.png").unlink(missing_ok=True)
+    (C().settings.cutout_dir / f"{item_id}.png").unlink(missing_ok=True)
 
 
 @app.get("/api/cutouts/{item_id}.png")
 def cutout(item_id: str) -> FileResponse:
     if not item_id.isalnum():
         raise HTTPException(404, "No such cutout.")
-    path = app.state.settings.cutout_dir / f"{item_id}.png"
+    path = C().settings.cutout_dir / f"{item_id}.png"
     if not path.exists():
         raise HTTPException(404, "No such cutout.")
     return FileResponse(path, media_type="image/png", headers={"Cache-Control": "public, max-age=31536000, immutable"})
@@ -305,10 +309,10 @@ def cutout(item_id: str) -> FileResponse:
 
 def _plan_out(record: dict) -> dict:
     """A stored plan with each look's items expanded, ready for the Today screen."""
-    store = app.state.store
+    store = C().store
     out = {k: record[k] for k in ("id", "day", "created_at", "source", "notes", "weather", "calendar")}
     out["trace"] = {k: v for k, v in record["trace"].items() if k in
-                    ("provider", "model", "tool_calls", "repairs", "seconds", "tokens_in", "tokens_out", "cached", "failures", "steps")}
+                    ("provider", "model", "tool_calls", "repairs", "seconds", "tokens_in", "tokens_out", "cached", "failures", "steps", "prebuilt")}
     plan = record["plan"]
     out["weather_summary"], out["plans_summary"] = plan["weather_summary"], plan["plans_summary"]
     out["looks"] = []
@@ -323,7 +327,7 @@ async def make_plan(body: PlanIn | None = None) -> dict:
     """The morning pick: three looks from the user's own clothes, for today's weather and plans."""
     body = body or PlanIn()
     try:
-        record = await app.state.planning.make_plan(body.day or today_local(), body.notes, body.lat, body.lon, body.fresh)
+        record = await C().planning.make_plan(body.day or today_local(), body.notes, body.lat, body.lon, body.fresh)
     except ValueError as e:
         raise HTTPException(409, str(e))
     return _plan_out(record)
@@ -331,18 +335,22 @@ async def make_plan(body: PlanIn | None = None) -> dict:
 
 @app.get("/api/plan")
 def latest_plan(day: date | None = None) -> dict:
-    record = app.state.store.get_plan(day=(day or today_local()).isoformat())
+    record = C().planning.current_plan(day or today_local())
     if not record:
         raise HTTPException(404, "No plan for that day yet; POST /api/plan.")
     return _plan_out(record)
 
 
 @app.post("/api/plans/{plan_id}/wear")
-def wear(plan_id: str, body: WearIn | None = None) -> dict:
-    """'Wear this': log the look, report rescued pieces, closet-alive change and the oni's mood."""
+def wear(plan_id: str, background: BackgroundTasks, body: WearIn | None = None) -> dict:
+    """'Wear this': log the look, report rescued pieces, closet-alive change and the oni's mood.
+    Tomorrow's plan starts building right away, so tomorrow morning opens on it."""
     body = body or WearIn()
+    day = body.day or today_local()
     try:
-        return app.state.planning.wear(plan_id, body.look, body.day or today_local())
+        out = C().planning.wear(plan_id, body.look, day)
+        background.add_task(C().planning.prebuild, day + timedelta(days=1))
+        return out
     except KeyError as e:
         raise HTTPException(404, str(e))
     except IndexError as e:
@@ -350,20 +358,24 @@ def wear(plan_id: str, body: WearIn | None = None) -> dict:
 
 
 @app.post("/api/checkins")
-async def checkin(body: CheckinIn) -> dict:
-    """Evening check-in: how the outfit went. The oni replies and may learn a preference."""
+async def checkin(body: CheckinIn, background: BackgroundTasks) -> dict:
+    """Evening check-in: how the outfit went. The oni replies and may learn a preference, and
+    tomorrow's plan is rebuilt with what it learned."""
     answers = body.model_dump(include={"temperature", "feeling", "tags", "note"})
-    return await app.state.planning.checkin(body.day or today_local(), answers, body.plan_id)
+    day = body.day or today_local()
+    out = await C().planning.checkin(day, answers, body.plan_id)
+    background.add_task(C().planning.prebuild, day + timedelta(days=1))
+    return out
 
 
 @app.get("/api/preferences")
 def preferences() -> list[dict]:
-    return app.state.store.list_preferences()
+    return C().store.list_preferences()
 
 
 @app.delete("/api/preferences/{pref_id}", status_code=204)
 def forget_preference(pref_id: int) -> None:
-    if not app.state.store.delete_preference(pref_id):
+    if not C().store.delete_preference(pref_id):
         raise HTTPException(404, "No such preference.")
 
 
@@ -383,7 +395,7 @@ class ThriftStatusIn(BaseModel):
 def _with_pairs(piece: dict) -> dict:
     """A gap piece with the closet items it pairs with expanded (for the 'goes with' row),
     plus its example photo if one has been made."""
-    store = app.state.store
+    store = C().store
     items = [store.get_item(i) for i in piece.get("pairs_with", [])]
     return {**piece, "pairs": [_item_out(i).model_dump() for i in items if i],
             "example_url": app.state.examples.url(piece) if piece.get("name") else None}
@@ -413,7 +425,7 @@ def example_file(name: str) -> FileResponse:
 async def find_gaps(body: GapsIn | None = None) -> dict:
     """The few pieces that would unlock the most outfits with what you own, with second-hand tips."""
     try:
-        record = await app.state.planning.gaps(today_local(), (body or GapsIn()).fresh)
+        record = await C().planning.gaps(today_local(), (body or GapsIn()).fresh)
     except ValueError as e:
         raise HTTPException(409, str(e))
     return {**record, "pieces": [_with_pairs(p) for p in record["pieces"]]}
@@ -422,7 +434,7 @@ async def find_gaps(body: GapsIn | None = None) -> dict:
 @app.get("/api/thrift")
 def thrift_list() -> list[dict]:
     """Pieces the user is watching for or has found (dismissed ones are hidden)."""
-    return [{**t, "piece": _with_pairs(t["piece"])} for t in app.state.store.list_thrift() if t["status"] != "dismissed"]
+    return [{**t, "piece": _with_pairs(t["piece"])} for t in C().store.list_thrift() if t["status"] != "dismissed"]
 
 
 @app.post("/api/thrift")
@@ -430,18 +442,18 @@ def add_thrift(body: ThriftIn) -> dict:
     if not body.piece.get("name"):
         raise HTTPException(422, "piece needs a name")
     piece = {k: v for k, v in body.piece.items() if k != "pairs"}
-    return {"id": app.state.store.add_thrift(piece, body.status)}
+    return {"id": C().store.add_thrift(piece, body.status)}
 
 
 @app.patch("/api/thrift/{thrift_id}", status_code=204)
 def update_thrift(thrift_id: int, body: ThriftStatusIn) -> None:
-    if not app.state.store.set_thrift_status(thrift_id, body.status):
+    if not C().store.set_thrift_status(thrift_id, body.status):
         raise HTTPException(404, "Not on the thrift list.")
 
 
 @app.delete("/api/thrift/{thrift_id}", status_code=204)
 def remove_thrift(thrift_id: int) -> None:
-    if not app.state.store.delete_thrift(thrift_id):
+    if not C().store.delete_thrift(thrift_id):
         raise HTTPException(404, "Not on the thrift list.")
 
 
@@ -458,13 +470,13 @@ class TryOnIn(BaseModel):
 @app.get("/api/tryon/profile")
 def tryon_profile() -> dict:
     """Who wears the try-on: mannequin details, whether a checked photo is on file, and if it's ready."""
-    return app.state.tryon.public_profile()
+    return C().tryon.public_profile()
 
 
 @app.put("/api/tryon/profile")
 def set_tryon_profile(body: TryOnProfileIn) -> dict:
     try:
-        return app.state.tryon.set_profile(body.mode, body.body)
+        return C().tryon.set_profile(body.mode, body.body)
     except (ValueError, ValidationError) as e:
         raise HTTPException(422, str(e))
 
@@ -476,7 +488,7 @@ async def upload_person_photo(photo: UploadFile = File(...), consent: bool = For
     if len(data) > MAX_PHOTO_BYTES:
         raise HTTPException(413, "That photo is too large.")
     try:
-        return await app.state.tryon.set_photo(data, consent)
+        return await C().tryon.set_photo(data, consent)
     except ValueError as e:
         raise HTTPException(422 if "confirm" in str(e) else 409, str(e))
 
@@ -484,14 +496,14 @@ async def upload_person_photo(photo: UploadFile = File(...), consent: bool = For
 @app.delete("/api/tryon/photo")
 def delete_person_photo() -> dict:
     """One tap: the photo and every render made from it are deleted."""
-    return {"renders_deleted": app.state.tryon.delete_photo()}
+    return {"renders_deleted": C().tryon.delete_photo()}
 
 
 @app.post("/api/tryon")
 async def start_tryon(body: TryOnIn) -> dict:  # async: the render job is scheduled on this event loop
     """Start (or reuse) a render of one look. Poll GET /api/tryon/jobs/{id} until status is done."""
     try:
-        return app.state.tryon.start(body.plan_id, body.look)
+        return C().tryon.start(body.plan_id, body.look)
     except KeyError as e:
         raise HTTPException(404, str(e).strip("'\""))
     except IndexError as e:
@@ -509,15 +521,15 @@ class LayersIn(BaseModel):
 async def tryon_layers(body: LayersIn) -> dict:
     """Layered try-on for the mannequin: the base image and one layer per garment, with their states.
     The app stacks ready layers itself, so swapping outfits needs no new render. Poll until ready."""
-    p = app.state.tryon.profile()
+    p = C().tryon.profile()
     if p["mode"] != "mannequin" or not p["body"]:
         raise HTTPException(409, "Layered try-on needs the mannequin set up.")
-    return app.state.layers.status(p["body"], body.item_ids[:60], prepare=body.prepare)
+    return C().layers.status(p["body"], body.item_ids[:60], prepare=body.prepare)
 
 
 @app.get("/api/layers/{base_key}/{name}.png")
 def layer_file(base_key: str, name: str) -> FileResponse:
-    path = app.state.layers.root / base_key / f"{name}.png"
+    path = C().layers.root / base_key / f"{name}.png"
     if not (base_key.isalnum() and name.isalnum()) or not path.exists():
         raise HTTPException(404, "No such layer.")
     return FileResponse(path, media_type="image/png", headers={"Cache-Control": "private, max-age=31536000, immutable"})
@@ -527,17 +539,17 @@ def layer_file(base_key: str, name: str) -> FileResponse:
 def tryon_flatlay(plan_id: str, look: int = 0) -> dict:
     """The always-exact flat-lay of a look, without starting a render."""
     try:
-        _, items = app.state.tryon._look(plan_id, look)
+        _, items = C().tryon._look(plan_id, look)
     except KeyError as e:
         raise HTTPException(404, str(e).strip("'\""))
     except IndexError as e:
         raise HTTPException(422, str(e))
-    return {"url": app.state.tryon.flatlay_url([i["id"] for i in items])}
+    return {"url": C().tryon.flatlay_url([i["id"] for i in items])}
 
 
 @app.get("/api/tryon/jobs/{job_id}")
 def tryon_job(job_id: str) -> dict:
-    job = app.state.tryon.jobs.get(job_id)
+    job = C().tryon.jobs.get(job_id)
     if not job:
         raise HTTPException(404, "No such try-on job (the server may have restarted).")
     return job
@@ -547,7 +559,7 @@ def tryon_job(job_id: str) -> dict:
 def render_file(name: str) -> FileResponse:
     if not name.replace("-", "").isalnum():
         raise HTTPException(404, "No such render.")
-    path = app.state.tryon.render_dir / f"{name}.png"
+    path = C().tryon.render_dir / f"{name}.png"
     if not path.exists():
         raise HTTPException(404, "No such render.")
     return FileResponse(path, media_type="image/png", headers={"Cache-Control": "private, max-age=86400"})
@@ -575,14 +587,52 @@ _geocode_cache: dict[str, list[dict]] = {}
 
 
 def _profile_out() -> dict:
-    planning = app.state.planning
+    planning = C().planning
     p = planning.profile()
     counts = {}
-    for i in app.state.store.list_items():
+    for i in C().store.list_items():
         if i["tags"]:
             counts[i["tags"]["category"]] = counts.get(i["tags"]["category"], 0) + 1
     return {**p, "wardrobe": counts, "can_plan": bool(counts.get("dress") or (counts.get("top") and counts.get("bottom"))),
-            "tryon": app.state.tryon.public_profile()}
+            "tryon": C().tryon.public_profile()}
+
+
+class ClosetIn(BaseModel):
+    id: str
+
+
+@app.get("/api/closet")
+def closet_info() -> dict:
+    """Which closet this browser is on. `id` is the key to it: only show it to its owner."""
+    per_device = app.state.settings.per_device
+    return {"per_device": per_device, "id": current_id() if per_device else MAIN}
+
+
+@app.post("/api/closet/open")
+def open_closet(body: ClosetIn, request: Request) -> dict:
+    """Move this browser to a closet it was given a link to (the owner's other device)."""
+    if not app.state.settings.per_device:
+        raise HTTPException(409, "There is only one closet here.")
+    if not app.state.closets.exists(body.id):
+        raise HTTPException(404, "That closet link doesn't work any more.")
+    request.scope[SCOPE_KEY]["cookie"] = body.id
+    return {"id": body.id}
+
+
+@app.post("/api/closet/sample")
+def load_sample_closet() -> dict:
+    """Fill this closet with the sample closet: 9 made-up garments, some long forgotten."""
+    return C().pipeline.load_sample(today_local())
+
+
+@app.post("/api/closet/new")
+def new_closet(request: Request) -> dict:
+    """Start over in a fresh, empty closet. The old one stays reachable through its link."""
+    if not app.state.settings.per_device:
+        raise HTTPException(409, "There is only one closet here.")
+    new = app.state.closets.new_id()
+    request.scope[SCOPE_KEY]["cookie"] = new
+    return {"id": new}
 
 
 @app.get("/api/profile")
@@ -593,12 +643,12 @@ def get_profile() -> dict:
 
 @app.put("/api/profile")
 def put_profile(body: ProfileIn) -> dict:
-    if body.calendar == "ics" and not app.state.planning.calendar_path.exists():
+    if body.calendar == "ics" and not C().planning.calendar_path.exists():
         raise HTTPException(422, "Upload a calendar file first.")
     changes = body.model_dump(exclude_none=True)
     if changes.get("onboarded"):
         changes["onboarded_at"] = now_iso()
-    app.state.planning.update_profile(**changes)
+    C().planning.update_profile(**changes)
     return _profile_out()
 
 
@@ -612,18 +662,18 @@ async def upload_calendar(file: UploadFile = File(...)) -> dict:
     events = tools._parse_ics(data.decode("utf-8", errors="replace"))
     if not events:
         raise HTTPException(422, "No events found. Export an .ics file from your calendar app (unzip it first if it came as a .zip).")
-    path = app.state.planning.calendar_path
+    path = C().planning.calendar_path
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(data)
-    app.state.planning.update_profile(calendar="ics", calendar_name=file.filename or "calendar.ics")
-    today = app.state.planning.calendar(today_local())
+    C().planning.update_profile(calendar="ics", calendar_name=file.filename or "calendar.ics")
+    today = C().planning.calendar(today_local())
     return {"events": len(events), "today": today["events"], "profile": _profile_out()}
 
 
 @app.delete("/api/profile/calendar")
 def delete_calendar() -> dict:
-    app.state.planning.calendar_path.unlink(missing_ok=True)
-    app.state.planning.store.put_setting("profile", {**app.state.planning.profile(), "calendar": "none", "calendar_name": None})
+    C().planning.calendar_path.unlink(missing_ok=True)
+    C().planning.store.put_setting("profile", {**C().planning.profile(), "calendar": "none", "calendar_name": None})
     return _profile_out()
 
 
@@ -655,7 +705,7 @@ def add_preference(body: PreferenceIn) -> dict:
     text = body.text.strip()
     if not 3 <= len(text) <= 200:
         raise HTTPException(422, "Preferences are 3-200 characters.")
-    return {"new": app.state.store.add_preference(text, body.applies_when, None)}
+    return {"new": C().store.add_preference(text, body.applies_when, None)}
 
 
 class StyleIn(BaseModel):
@@ -667,13 +717,13 @@ class StyleIn(BaseModel):
 def get_style() -> dict:
     """The basics checklist (with its catalog) and skipped touches."""
     from closet import styling
-    return {**app.state.planning.style(),
+    return {**C().planning.style(),
             "catalog": [{"group": g, "items": [{"key": k, "label": label} for k, label in items]} for g, items in styling.BASICS.items()]}
 
 
 @app.put("/api/style")
 def put_style(body: StyleIn) -> dict:
-    app.state.planning.update_style(body.basics, body.skip)
+    C().planning.update_style(body.basics, body.skip)
     return get_style()
 
 
@@ -682,7 +732,7 @@ async def look_touches(plan_id: str, look: int = 0) -> dict:
     """Finishing touches for one look: underlayers, accessories and small techniques from the styling
     playbook, using basics the user owns first. Never a shopping suggestion."""
     try:
-        return await app.state.planning.touches(plan_id, look)
+        return await C().planning.touches(plan_id, look)
     except KeyError as e:
         raise HTTPException(404, str(e).strip("'\""))
     except IndexError as e:
@@ -692,7 +742,7 @@ async def look_touches(plan_id: str, look: int = 0) -> dict:
 @app.get("/api/oni")
 def oni(day: date | None = None) -> dict:
     """The oni's mood and the closet-alive meter, for the Today header."""
-    return app.state.planning.oni(day or today_local())
+    return C().planning.oni(day or today_local())
 
 
 @app.post("/api/dev/seed")
@@ -702,4 +752,4 @@ def seed(body: SeedIn) -> dict:
     run_dir = (config.ROOT / body.run).resolve()
     if out_root not in run_dir.parents or not (run_dir / "cutouts").is_dir():
         raise HTTPException(422, "run must be a spike output folder under out/ with a cutouts/ folder.")
-    return app.state.pipeline.seed_from_run(Path(run_dir))
+    return C().pipeline.seed_from_run(Path(run_dir))

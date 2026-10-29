@@ -139,7 +139,7 @@ def test_plan_wear_checkin(var_dir: Path, run_dir: Path) -> None:
         c.post("/api/dev/seed", json={"run": str(run_dir.relative_to(config.ROOT))})
 
         plan = c.post("/api/plan", json={"day": "2026-10-28", "notes": "nothing too warm"}).json()
-        assert plan["source"] == "rules" and len(plan["looks"]) == 3, plan
+        assert plan["source"] == "rules" and len(plan["looks"]) == 1, "one top + one bottom is one look, not three copies"
         assert all(len(l["items"]) >= 2 for l in plan["looks"]), plan["looks"]
         assert {i["tags"]["category"] for i in plan["looks"][0]["items"]} >= {"top", "bottom"}
         assert c.get("/api/plan", params={"day": "2026-10-28"}).json()["id"] == plan["id"]
@@ -195,7 +195,7 @@ def test_plan_wear_checkin(var_dir: Path, run_dir: Path) -> None:
         assert c.delete(f"/api/thrift/{tid}").status_code == 204
 
         # Try-on in fixture mode: setup rules, flat-lay fallback, cached renders, photo privacy.
-        tryon = main.app.state.tryon
+        tryon = main.app.state.closets.get("main").tryon
         assert c.get("/api/tryon/profile").json() == {"mode": "mannequin", "body": None, "ready": False, "photo": None}
         assert c.post("/api/tryon", json={"plan_id": plan["id"], "look": 0}).status_code == 409, "not set up yet"
         assert c.put("/api/tryon/profile", json={"mode": "mannequin"}).status_code == 422, "a mannequin needs details"
@@ -239,7 +239,7 @@ def test_plan_wear_checkin(var_dir: Path, run_dir: Path) -> None:
         assert c.get(f"/api/renders/{key}.png").status_code == 200, "mannequin renders are kept"
 
         # Layered try-on: fixture mode reports what exists and never generates.
-        layers = main.app.state.layers
+        layers = main.app.state.closets.get("main").layers
         ids = plan["looks"][0]["item_ids"]
         st = c.post("/api/tryon/layers", json={"item_ids": ids}).json()
         assert st["base"]["state"] == "missing" and not st["live"] and st["note"], st
@@ -326,7 +326,7 @@ def test_getting_started(var_dir: Path, run_dir: Path) -> None:
 
         loc = {"name": "Osaka, Japan", "lat": 34.69, "lon": 135.5}
         assert c.put("/api/profile", json={"location": loc}).json()["location"] == loc
-        assert main.app.state.planning.location() == (34.69, 135.5)
+        assert main.app.state.closets.get("main").planning.location() == (34.69, 135.5)
         assert c.put("/api/profile", json={"calendar": "ics"}).status_code == 422, "no file uploaded yet"
 
         today = d.today().strftime("%Y%m%d")
@@ -547,7 +547,7 @@ def test_duplicates(var_dir: Path) -> None:
             c.post("/api/dev/seed", json={"run": str(run_dir.relative_to(config.ROOT))})
             items = {i["source"]: i for i in c.get("/api/wardrobe").json()}
             big, small, b = items["a_big.png"], items["a_small.png"], items["b.png"]
-            store = main.app.state.store
+            store = main.app.state.closets.get("main").store
             store.record_wear("2026-10-20", [small["id"]], None, None)
 
             verdicts[frozenset(((200, 220), (90, 100)))] = SameGarment(
@@ -578,6 +578,63 @@ def test_duplicates(var_dir: Path) -> None:
         shutil.rmtree(run_dir, ignore_errors=True)
 
 
+def test_device_closets(var_dir: Path, run_dir: Path) -> None:
+    """MONSTER_CLOSETS=device: two browsers never see each other's clothes, and a link moves one across."""
+    os.environ["MONSTER_CLOSETS"] = "device"
+    try:
+        with client_for("fixture", var_dir) as a:
+            b = TestClient(main.app)  # a second browser: its own cookie jar, the same running app
+            ida, idb = a.get("/api/closet").json(), b.get("/api/closet").json()
+            assert ida["per_device"] and ida["id"] != idb["id"], (ida, idb)
+            ida, idb = ida["id"], idb["id"]
+            assert a.get("/api/closet").json()["id"] == ida, "the cookie must stick"
+
+            r = a.post("/api/dev/seed", json={"run": str(run_dir.relative_to(config.ROOT))})
+            assert r.status_code == 200 and r.json()["imported"] == 2, r.text
+            mine = a.get("/api/wardrobe").json()
+            assert len(mine) == 2 and b.get("/api/wardrobe").json() == []
+            assert b.get(f"/api/cutouts/{mine[0]['id']}.png").status_code == 404, "cutouts are per closet too"
+            assert a.get("/api/profile").json()["onboarded"] is False and b.post("/api/scans", files=[
+                ("photos", ("x.jpg", photo_bytes(3), "image/jpeg"))]).status_code == 409, "no replay of another closet"
+
+            assert b.post("/api/closet/open", json={"id": "f" * 32}).status_code == 404
+            assert b.post("/api/closet/open", json={"id": "main"}).status_code == 404, "the var/ root is never a closet"
+            assert b.post("/api/closet/open", json={"id": ida}).status_code == 200
+            assert len(b.get("/api/wardrobe").json()) == 2, "the link opens the same closet on the second device"
+            assert b.post("/api/closet/new").status_code == 200 and b.get("/api/wardrobe").json() == []
+            assert (var_dir / "closets" / ida / "wardrobe.sqlite3").exists()
+            assert not (var_dir / "wardrobe.sqlite3").exists(), "device mode keeps nothing in the root closet"
+    finally:
+        os.environ.pop("MONSTER_CLOSETS", None)
+
+
+def test_sample_closet_and_prebuild(var_dir: Path) -> None:
+    """The sample closet plans straight away, a short closet says what's missing, and a wear builds tomorrow ahead."""
+    with client_for("fixture", var_dir) as c:
+        r = c.post("/api/plan")
+        assert r.status_code == 409 and "sample closet" in r.json()["detail"], r.text
+
+        assert c.post("/api/closet/sample").json()["imported"] == 9
+        assert c.post("/api/closet/sample").json()["imported"] == 9 and len(c.get("/api/wardrobe").json()) == 9, "loading twice is harmless"
+        items = c.get("/api/wardrobe").json()
+        assert all(i["tags"] and i["worn_estimated"] for i in items) and c.get(f"/api/cutouts/{items[0]['id']}.png").status_code == 200
+        assert c.get("/api/oni").json()["closet_alive_pct"] > 0, "the sample closet has recent wears to show"
+
+        plan = c.post("/api/plan", json={"day": "2026-10-28"}).json()
+        assert len(plan["looks"]) == 3 and len({frozenset(lk["item_ids"]) for lk in plan["looks"]}) == 3, plan["looks"]
+        assert any(lk["rediscovered_id"] for lk in plan["looks"]), "something long forgotten gets rescued"
+
+        assert c.get("/api/plan", params={"day": "2026-10-29"}).status_code == 404
+        c.post(f"/api/plans/{plan['id']}/wear", json={"look": 0, "day": "2026-10-28"})
+        ahead = c.get("/api/plan", params={"day": "2026-10-29"})
+        assert ahead.status_code == 200 and ahead.json()["trace"]["prebuilt"], "a wear builds tomorrow's plan ahead"
+
+        # Something changes after it was built (a piece's last-worn date), so it no longer counts.
+        other = next(i for i in items if i["id"] not in plan["looks"][0]["item_ids"])
+        assert c.post("/api/wardrobe/last-worn", json={"items": [{"id": other["id"], "days_ago": 2}]}).status_code == 200
+        assert c.get("/api/plan", params={"day": "2026-10-29"}).status_code == 404, "a stale plan made ahead is dropped"
+
+
 def main_() -> None:
     tmp = Path(tempfile.mkdtemp(prefix="monster-test-"))
     run_dir = config.ROOT / "out" / f"_test_seed_{tmp.name}"
@@ -601,8 +658,10 @@ def main_() -> None:
         test_cut_layer()
         test_agent_loop_and_repair()
         test_duplicates(tmp / "dupes")
-        print("OK: fixture mode, seeding, tag fixes, caching, dedupe, planning, wear, check-ins, the agent loop, gap finder, try-on, layered try-on, getting started, finishing touches, colour reads "
-              "and cross-photo duplicates all behave.")
+        test_device_closets(tmp / "devices", run_dir)
+        test_sample_closet_and_prebuild(tmp / "sample")
+        print("OK: fixture mode, seeding, tag fixes, caching, dedupe, planning, wear, check-ins, the agent loop, gap finder, try-on, layered try-on, getting started, finishing touches, colour reads, "
+              "cross-photo duplicates, per-device closets, the sample closet and plans made ahead all behave.")
     finally:
         shutil.rmtree(run_dir, ignore_errors=True)
         shutil.rmtree(tmp, ignore_errors=True)

@@ -1,0 +1,225 @@
+[
+ {
+  "id": "04928617f29c4d83",
+  "idle_days": 3,
+  "tags": {
+   "is_garment": true,
+   "category": "top",
+   "subtype": "crew-neck t-shirt",
+   "primary_color": "black",
+   "secondary_colors": [],
+   "pattern": "solid",
+   "material_guess": "cotton jersey",
+   "warmth": 1,
+   "formality": "casual",
+   "seasons": [
+    "spring",
+    "summer"
+   ],
+   "fit": "regular fit, short sleeve",
+   "distinctive_details": "none",
+   "visible_side": "front",
+   "print_side": "unknown",
+   "confidence": 0.97
+  }
+ },
+ {
+  "id": "b310c37186c201ba",
+  "idle_days": 140,
+  "tags": {
+   "is_garment": true,
+   "category": "top",
+   "subtype": "crewneck sweater",
+   "primary_color": "gray",
+   "secondary_colors": [],
+   "pattern": "solid",
+   "material_guess": "wool blend knit",
+   "warmth": 3,
+   "formality": "casual",
+   "seasons": [
+    "fall",
+    "winter"
+   ],
+   "fit": "regular fit, long sleeve",
+   "distinctive_details": "none",
+   "visible_side": "front",
+   "print_side": "unknown",
+   "confidence": 0.96
+  }
+ },
+ {
+  "id": "0f8aa8debac59780",
+  "idle_days": 12,
+  "tags": {
+   "is_garment": true,
+   "category": "top",
+   "subtype": "cable-knit cardigan",
+   "primary_color": "cream",
+   "secondary_colors": [],
+   "pattern": "solid",
+   "material_guess": "chunky wool or wool-blend knit",
+   "warmth": 4,
+   "formality": "casual",
+   "seasons": [
+    "fall",
+    "winter"
+   ],
+   "fit": "oversized, relaxed, open-front",
+   "distinctive_details": "thick cable-knit braided pattern throughout, ribbed cuffs and hem, open V-neck front without buttons",
+   "visible_side": "front",
+   "print_side": "unknown",
+   "confidence": 0.97
+  }
+ },
+ {
+  "id": "93c1d6bd6e24c05d",
+  "idle_days": 1,
+  "tags": {
+   "is_garment": true,
+   "category": "top",
+   "subtype": "oxford shirt",
+   "primary_color": "white",
+   "secondary_colors": [],
+   "pattern": "solid",
+   "material_guess": "cotton oxford",
+   "warmth": 2,
+   "formality": "smart_casual",
+   "seasons": [
+    "spring",
+    "summer",
+    "fall"
+   ],
+   "fit": "regular fit, straight",
+   "distinctive_details": "none, plain with front button placket, pointed collar, button cuffs",
+   "visible_side": "front",
+   "print_side": "unknown",
+   "confidence": 0.98
+  }
+ },
+ {
+  "id": "1f489bb28a9612c4",
+  "idle_days": 260,
+  "tags": {
+   "is_garment": true,
+   "category": "top",
+   "subtype": "striped long-sleeve t-shirt",
+   "primary_color": "white",
+   "secondary_colors": [
+    "navy"
+   ],
+   "pattern": "striped",
+   "material_guess": "cotton jersey",
+   "warmth": 2,
+   "formality": "casual",
+   "seasons": [
+    "spring",
+    "fall"
+   ],
+   "fit": "regular, slightly slim",
+   "distinctive_details": "horizontal navy stripes on white base, round crew neckline",
+   "visible_side": "front",
+   "print_side": "unknown",
+   "confidence": 0.96
+  }
+ },
+ {
+  "id": "410b7578b8172e56",
+  "idle_days": 6,
+  "tags": {
+   "is_garment": true,
+   "category": "bottom",
+   "subtype": "pleated wide-leg trousers",
+   "primary_color": "black",
+   "secondary_colors": [],
+   "pattern": "solid",
+   "material_guess": "wool-blend suiting",
+   "warmth": 3,
+   "formality": "smart_casual",
+   "seasons": [
+    "spring",
+    "fall",
+    "winter"
+   ],
+   "fit": "wide-leg, loose, high-rise",
+   "distinctive_details": "double front pleats, pressed center crease",
+   "visible_side": "front",
+   "print_side": "unknown",
+   "confidence": 0.96
+  }
+ },
+ {
+  "id": "dd97e86ca07806ef",
+  "idle_days": 45,
+  "tags": {
+   "is_garment": true,
+   "category": "outerwear",
+   "subtype": "field jacket",
+   "primary_color": "olive green",
+   "secondary_colors": [],
+   "pattern": "solid",
+   "material_guess": "cotton twill",
+   "warmth": 2,
+   "formality": "casual",
+   "seasons": [
+    "spring",
+    "fall"
+   ],
+   "fit": "regular, straight, hip-length",
+   "distinctive_details": "four flap button pockets, front button closure, shirt collar",
+   "visible_side": "front",
+   "print_side": "unknown",
+   "confidence": 0.96
+  }
+ },
+ {
+  "id": "d064b68b32a8366f",
+  "idle_days": 400,
+  "tags": {
+   "is_garment": true,
+   "category": "bottom",
+   "subtype": "straight-leg jeans",
+   "primary_color": "dark blue",
+   "secondary_colors": [],
+   "pattern": "solid",
+   "material_guess": "denim",
+   "warmth": 3,
+   "formality": "casual",
+   "seasons": [
+    "spring",
+    "summer",
+    "fall",
+    "winter"
+   ],
+   "fit": "slim straight, high-rise",
+   "distinctive_details": "plain dark rinse with contrast stitching",
+   "visible_side": "front",
+   "print_side": "unknown",
+   "confidence": 0.95
+  }
+ },
+ {
+  "id": "03449856702dba5a",
+  "idle_days": 90,
+  "tags": {
+   "is_garment": true,
+   "category": "bottom",
+   "subtype": "chino pants",
+   "primary_color": "beige",
+   "secondary_colors": [],
+   "pattern": "solid",
+   "material_guess": "cotton twill",
+   "warmth": 2,
+   "formality": "smart_casual",
+   "seasons": [
+    "spring",
+    "summer",
+    "fall"
+   ],
+   "fit": "slim straight, flat-front",
+   "distinctive_details": "none, plain flat-front with slant side pockets and belt loops",
+   "visible_side": "front",
+   "print_side": "unknown",
+   "confidence": 0.95
+  }
+ }
+]

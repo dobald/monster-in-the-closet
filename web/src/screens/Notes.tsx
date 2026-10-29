@@ -5,6 +5,7 @@ import Oni, { MOOD_LABEL } from "../Oni";
 import { getTheme, setTheme, type Theme } from "../theme";
 import { AliveBar } from "./Today";
 import { BasicsChecklist } from "./Touches";
+import { DataNote } from "./Onboarding";
 
 // The oni's notebook: its mood, the closet-alive meter, try-on settings, and every preference
 // it has learned from check-ins, each one forgettable.
@@ -57,12 +58,12 @@ export default function Notes({ ctx }: { ctx: AppCtx }) {
       </section>
 
       <section aria-label="Closet stats" style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 8 }}>
-        <Stat label="ALIVE" value={`${oni?.closet_alive_pct ?? 0}%`} />
+        <Stat label="ALIVE" value={oni?.has_history ? `${oni.closet_alive_pct}%` : "—"} />
         <Stat label="FORGOTTEN" value={String(oni?.forgotten ?? 0)} shu={(oni?.forgotten ?? 0) > 0} />
         <Stat label="STREAK" value={`${oni?.streak_days ?? 0}d`} />
       </section>
       <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-        <AliveBar pct={oni?.closet_alive_pct ?? 0} />
+        {oni?.has_history && <AliveBar pct={oni.closet_alive_pct} />}
         <div className="label" style={{ display: "flex", justifyContent: "space-between", fontWeight: 400, fontSize: 9 }}>
           <span>RESTLESS</span>
           <span>CALM · 25%</span>
@@ -146,6 +147,25 @@ export default function Notes({ ctx }: { ctx: AppCtx }) {
         </div>
       </section>
 
+      <section aria-label="Today view" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+        <span className="label">TODAY VIEW · <span lang="ja">画面</span></span>
+        <div role="radiogroup" aria-label="Today view" style={{ display: "flex", gap: 6 }}>
+          {(["simple", "full"] as const).map((v) => (
+            <button
+              key={v}
+              type="button"
+              role="radio"
+              aria-checked={ctx.view === v}
+              className="chip press"
+              style={{ height: 30, fontSize: 12, padding: "0 10px" }}
+              onClick={() => ctx.setView(v)}
+            >
+              {v === "simple" ? "Simple" : "Everything"}
+            </button>
+          ))}
+        </div>
+      </section>
+
       <BasicsChecklist ctx={ctx} />
 
       <section aria-label="Learned preferences" style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 4 }}>
@@ -170,6 +190,8 @@ export default function Notes({ ctx }: { ctx: AppCtx }) {
         ))}
       </section>
 
+      <YourCloset ctx={ctx} />
+
       {ctx.health && (
         <span className="label muted" style={{ fontWeight: 400, textAlign: "center", marginTop: 10 }}>
           SERVER · {ctx.health.mode.toUpperCase()} MODE · {ctx.health.garments} GARMENTS · {ctx.health.scans} SCANS
@@ -185,5 +207,51 @@ function Stat({ label, value, shu }: { label: string; value: string; shu?: boole
       <span className="label" style={{ fontSize: 9 }}>{label}</span>
       <span className="display" style={{ fontSize: 24 }}>{value}</span>
     </div>
+  );
+}
+
+// Where this closet lives and how to reach it from another device. On a shared server (one closet per
+// device) the link is the only key to the closet, so it's shown only here, to its owner.
+function YourCloset({ ctx }: { ctx: AppCtx }) {
+  const [closet, setCloset] = useState<{ per_device: boolean; id: string } | null>(null);
+  useEffect(() => {
+    api.closet().then(setCloset).catch(() => {});
+  }, []);
+  if (!closet) return null;
+  const link = `${window.location.origin}/?closet=${closet.id}`;
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(link);
+      ctx.toast("Link copied. Open it on your other device; keep it private, it opens your closet.");
+    } catch {
+      window.prompt("Copy this link and open it on your other device:", link);
+    }
+  };
+  const startOver = async () => {
+    if (!window.confirm("Start a new, empty closet on this device? Your current closet stays reachable through its link.")) return;
+    try {
+      await api.newCloset();
+      window.location.reload();
+    } catch (e) {
+      ctx.toast((e as Error).message);
+    }
+  };
+
+  return (
+    <section aria-label="Your closet" style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 4 }}>
+      <span className="label">YOUR CLOSET · <span lang="ja">クローゼット</span></span>
+      <DataNote />
+      {closet.per_device && (
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          <button type="button" className="chip press" style={{ height: 30, fontSize: 12, padding: "0 10px" }} onClick={copy}>
+            Open on another device
+          </button>
+          <button type="button" className="chip press" style={{ height: 30, fontSize: 12, padding: "0 10px" }} onClick={startOver}>
+            Start a new closet
+          </button>
+        </div>
+      )}
+    </section>
   );
 }

@@ -298,6 +298,43 @@ def _coldest_feels_like(weather: dict) -> float:
     return min((p["feels_like_low_c"] for p in parts.values()), default=15)
 
 
+def outfit_gap(items: list[dict]) -> str | None:
+    """Why no outfit can be made from these items yet, in the oni's words, or None if one can."""
+    cats = {i["tags"]["category"] for i in items if i.get("tags")}
+    if "dress" in cats or {"top", "bottom"} <= cats:
+        return None
+    if not cats:
+        return "Your closet is empty. Scan a few clothes laid flat, or load the sample closet."
+    if "top" in cats:
+        return "I need at least one bottom to make an outfit. Scan a pair of trousers, jeans or a skirt."
+    if "bottom" in cats:
+        return "I need at least one top to make an outfit. Scan a shirt, tee or sweater."
+    return "I need a top and a bottom (or a dress) to make an outfit. Scan a few more pieces."
+
+
+def distinct(combos: list[tuple[dict, ...]]) -> list[tuple[dict, ...]]:
+    """Drop outfits that repeat an earlier one exactly: a tiny closet gets fewer looks, not three copies."""
+    seen, out = set(), []
+    for c in combos:
+        key = frozenset(i["id"] for i in c)
+        if key not in seen:
+            seen.add(key)
+            out.append(c)
+    return out
+
+
+def distinct_looks(plan: OutfitPlan) -> OutfitPlan:
+    """The same rule for any plan, the agent's included."""
+    seen, looks = set(), []
+    for look in plan.looks:
+        key = frozenset(look.item_ids)
+        if key not in seen:
+            seen.add(key)
+            looks.append(look)
+    plan.looks = looks or plan.looks[:1]
+    return plan
+
+
 def plan_with_rules(items: list[dict], weather: dict, calendar: dict, notes: str, today: date) -> OutfitPlan:
     """Deterministic picker: warmth from the coldest feels-like, formality from events, forgotten pieces first."""
     cold = _coldest_feels_like(weather)
@@ -318,26 +355,33 @@ def plan_with_rules(items: list[dict], weather: dict, calendar: dict, notes: str
         form = 4 if dressy and t["formality"] in ("smart_casual", "business") else 0
         return forgotten(it) * 0.5 + fit + form
 
-    pool = [i for i in items if ok(i)] or items
-    tops = sorted((i for i in pool if i["tags"]["category"] == "top"), key=score, reverse=True)
-    bottoms = sorted((i for i in pool if i["tags"]["category"] == "bottom"), key=score, reverse=True)
-    outer = sorted((i for i in pool if i["tags"]["category"] == "outerwear"), key=score, reverse=True)
-    if not tops or not bottoms:
-        raise ValueError("The wardrobe needs at least one top and one bottom for a plan.")
+    gap = outfit_gap(items)
+    if gap:
+        raise ValueError(gap)
+    pool = [i for i in items if ok(i)]
+    pool = pool if not outfit_gap(pool) else items  # "no black" can't leave you with nothing to wear
+    by_cat = lambda cat: sorted((i for i in pool if i["tags"]["category"] == cat), key=score, reverse=True)  # noqa: E731
+    tops, bottoms, dresses, outer = by_cat("top"), by_cat("bottom"), by_cat("dress"), by_cat("outerwear")
 
-    combos = [(tops[0], bottoms[0]), (tops[min(1, len(tops) - 1)], bottoms[min(1, len(bottoms) - 1)])]
-    favourites = sorted(pool, key=lambda i: i["wear_count"], reverse=True)
-    fav_top = next((i for i in favourites if i["tags"]["category"] == "top"), tops[-1])
-    fav_bottom = next((i for i in favourites if i["tags"]["category"] == "bottom"), bottoms[-1])
-    combos.append((fav_top, fav_bottom))
+    combos: list[tuple[dict, ...]] = []
+    if tops and bottoms:
+        combos = [(tops[0], bottoms[0]), (tops[min(1, len(tops) - 1)], bottoms[min(1, len(bottoms) - 1)])]
+        favourites = sorted(pool, key=lambda i: i["wear_count"], reverse=True)
+        fav_top = next((i for i in favourites if i["tags"]["category"] == "top"), tops[-1])
+        fav_bottom = next((i for i in favourites if i["tags"]["category"] == "bottom"), bottoms[-1])
+        combos.append((fav_top, fav_bottom))
+    if dresses:
+        combos[1:1] = [(d,) for d in (dresses[:1] if combos else dresses[:3])]
 
     looks = []
-    for n, (top, bottom) in enumerate(combos):
-        ids = [top["id"], bottom["id"]] + ([outer[0]["id"]] if outer and cold < 12 else [])
-        rescued = max((top, bottom), key=forgotten)
+    for pieces in distinct(combos)[:3]:
+        n = len(looks)
+        ids = [p["id"] for p in pieces] + ([outer[0]["id"]] if outer and cold < 12 else [])
+        rescued = max(pieces, key=forgotten)
         name = ["Rediscovered pick", "Fresh mix", "Safe favourite"][n]
-        why = (f"{top['tags']['subtype'].capitalize()} with {bottom['tags']['subtype']}"
-               f" — warm enough for a feels-like low of {round(cold)}°" + (", and smart enough for today's plans." if dressy else "."))
+        why = (" with ".join(p["tags"]["subtype"] for p in pieces).capitalize()
+               + f" — warm enough for a feels-like low of {round(cold)}°"
+               + (", and smart enough for today's plans." if dressy else "."))
         looks.append(Look(name=name, item_ids=ids, why=why,
                           rediscovered_id=rescued["id"] if forgotten(rescued) >= 30 else None))
 

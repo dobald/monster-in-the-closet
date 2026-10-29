@@ -15,7 +15,7 @@ const ADJUST: { label: string; note: string }[] = [
   { label: "No black", note: "nothing black" },
 ];
 
-type Load = { state: "loading" | "thinking" } | { state: "empty" } | { state: "error"; msg: string } | { state: "ready" };
+type Load = { state: "loading" | "thinking" } | { state: "empty"; msg: string } | { state: "error"; msg: string } | { state: "ready" };
 
 export default function Today({ ctx }: { ctx: AppCtx }) {
   const [plan, setPlan] = useState<Plan | null>(null);
@@ -25,6 +25,9 @@ export default function Today({ ctx }: { ctx: AppCtx }) {
   const [wearing, setWearing] = useState(false);
   const [wornLook, setWornLook] = useState<number | null>(null);
   const [showTrace, setShowTrace] = useState(false);
+  const [more, setMore] = useState(false); // simple view: the folded extras for this visit
+  const full = ctx.view === "full";
+  const open = full || more;
 
   const replan = async (notes: string, fresh = false) => {
     setLoad({ state: "thinking" });
@@ -34,7 +37,7 @@ export default function Today({ ctx }: { ctx: AppCtx }) {
       setLookIndex(0);
       setLoad({ state: "ready" });
     } catch (e) {
-      if (e instanceof ApiError && e.status === 409) setLoad({ state: "empty" });
+      if (e instanceof ApiError && e.status === 409) setLoad({ state: "empty", msg: e.message });
       else setLoad({ state: "error", msg: (e as Error).message });
     }
   };
@@ -123,7 +126,7 @@ export default function Today({ ctx }: { ctx: AppCtx }) {
         type="button"
         onClick={() => ctx.go("notes")}
         style={{ display: "flex", alignItems: "center", gap: 12, border: 0, background: "transparent", padding: 0, textAlign: "left" }}
-        aria-label={`Oni is ${MOOD_LABEL[mood].en}. Closet alive ${ctx.oni?.closet_alive_pct ?? 0}%. Open notes.`}
+        aria-label={`Oni is ${MOOD_LABEL[mood].en}.${ctx.oni?.has_history ? ` Closet alive ${ctx.oni.closet_alive_pct}%.` : ""} Open notes.`}
       >
         <Oni mood={mood} size={52} />
         <span style={{ flex: 1, display: "flex", flexDirection: "column", gap: 4 }}>
@@ -131,13 +134,13 @@ export default function Today({ ctx }: { ctx: AppCtx }) {
             <span style={{ fontWeight: 700, fontSize: 14 }}>
               {MOOD_LABEL[mood].en} <span lang="ja" style={{ fontWeight: 500, fontSize: 12 }}>{MOOD_LABEL[mood].ja}</span>
             </span>
-            <span className="label">CLOSET ALIVE {ctx.oni?.closet_alive_pct ?? 0}%</span>
+            <span className="label">{ctx.oni?.has_history ? `CLOSET ALIVE ${ctx.oni.closet_alive_pct}%` : "NO WEAR HISTORY YET"}</span>
           </span>
-          <AliveBar pct={ctx.oni?.closet_alive_pct ?? 0} />
+          {ctx.oni?.has_history && <AliveBar pct={ctx.oni.closet_alive_pct} />}
         </span>
       </button>
 
-      {load.state === "empty" && <EmptyCloset go={() => ctx.go("scan")} />}
+      {load.state === "empty" && <EmptyCloset msg={load.msg} ctx={ctx} />}
       {load.state === "error" && (
         <div className="card" style={{ padding: 14, display: "flex", flexDirection: "column", gap: 10 }}>
           <strong>The oni couldn't plan today.</strong>
@@ -189,13 +192,12 @@ export default function Today({ ctx }: { ctx: AppCtx }) {
             </div>
 
             {load.state !== "ready" || !look ? (
-              <Thinking slow={load.state === "thinking" && ctx.health?.mode === "live"} />
+              <Thinking slow={load.state === "thinking" && ctx.health?.mode === "live"} full={full} />
             ) : (
               <>
                 <Collage key={plan!.id + lookIndex} items={look.items} onOpen={ctx.openItem} onTryOn={() => ctx.openTryOn(plan!, lookIndex)} />
                 <h2 className="display" style={{ fontSize: 22, lineHeight: 1.05 }}>{look.name}</h2>
                 <p style={{ margin: 0, fontSize: 14, lineHeight: 1.55 }}>{look.why}</p>
-                <Touches plan={plan!} lookIndex={lookIndex} ctx={ctx} />
               </>
             )}
 
@@ -220,7 +222,21 @@ export default function Today({ ctx }: { ctx: AppCtx }) {
               </button>
             </div>
 
-            <div role="group" aria-label="Adjust the pick" style={{ display: "flex", gap: 6, flexWrap: "wrap", paddingBottom: 2 }}>
+            {!full && load.state === "ready" && look && (
+              <button
+                type="button"
+                className="press"
+                aria-expanded={more}
+                onClick={() => setMore(!more)}
+                style={{ border: 0, background: "transparent", padding: "2px 0", display: "flex", justifyContent: "space-between", fontWeight: 700, fontSize: 13 }}
+              >
+                <span>{more ? "Less" : "More: finishing touches, colours, tweaks"}</span>
+                <span aria-hidden="true">{more ? "▴" : "▾"}</span>
+              </button>
+            )}
+            {open && load.state === "ready" && look && <Touches plan={plan!} lookIndex={lookIndex} ctx={ctx} />}
+
+            {open && <div role="group" aria-label="Adjust the pick" style={{ display: "flex", gap: 6, flexWrap: "wrap", paddingBottom: 2 }}>
               {ADJUST.map((a) => (
                 <button
                   key={a.label}
@@ -243,12 +259,12 @@ export default function Today({ ctx }: { ctx: AppCtx }) {
               >
                 Re-roll ↻
               </button>
-            </div>
+            </div>}
           </div>
         </section>
       )}
 
-      {plan && load.state === "ready" && <PlanSource plan={plan} onOpen={() => setShowTrace(true)} />}
+      {plan && load.state === "ready" && open && <PlanSource plan={plan} onOpen={() => setShowTrace(true)} />}
       {showTrace && plan && <TraceSheet plan={plan} onClose={() => setShowTrace(false)} />}
 
       <button
@@ -478,7 +494,7 @@ function Collage({ items, onOpen, onTryOn }: { items: Item[]; onOpen: (i: Item) 
   );
 }
 
-function Thinking({ slow }: { slow: boolean }) {
+function Thinking({ slow, full }: { slow: boolean; full: boolean }) {
   return (
     <div
       className="halftone"
@@ -488,7 +504,11 @@ function Thinking({ slow }: { slow: boolean }) {
       <span style={{ background: "var(--washi)", border: "var(--line)", borderRadius: 6, padding: "4px 10px", fontWeight: 700, fontSize: 13 }}>
         <span className="spinner-dots">Checking the weather and your day</span>
       </span>
-      {slow && <span className="label" style={{ background: "var(--washi)", padding: "2px 6px" }}>MUSE SPARK OPEN · ~15S</span>}
+      {slow && (
+        <span className="label" style={{ background: "var(--washi)", padding: "2px 6px" }}>
+          {full ? "MUSE SPARK OPEN · ~15S" : "ABOUT 15 SECONDS"}
+        </span>
+      )}
     </div>
   );
 }
@@ -498,7 +518,7 @@ function PlanSource({ plan, onOpen }: { plan: Plan; onOpen: () => void }) {
   const t = plan.trace;
   const who =
     plan.source === "rules" ? "RULE PICKER" : (t.model ?? t.provider ?? "MODEL").replace("meta-models/", "").toUpperCase();
-  const extra = t.cached || plan.source === "cache" ? "CACHED" : t.seconds ? `${t.seconds}S` : "";
+  const extra = t.prebuilt ? "READY AHEAD" : t.cached || plan.source === "cache" ? "CACHED" : t.seconds ? `${t.seconds}S` : "";
   const steps = t.steps?.length ?? 0;
   return (
     <button
@@ -525,15 +545,34 @@ function PlanSource({ plan, onOpen }: { plan: Plan; onOpen: () => void }) {
   );
 }
 
-function EmptyCloset({ go }: { go: () => void }) {
+function EmptyCloset({ msg, ctx }: { msg: string; ctx: AppCtx }) {
+  const [busy, setBusy] = useState(false);
+  const empty = msg.startsWith("Your closet is empty");
+  const sample = async () => {
+    setBusy(true);
+    try {
+      await api.loadSample();
+      ctx.bumpWardrobe(); // Today reloads and plans from the sample closet
+    } catch (e) {
+      ctx.toast((e as Error).message);
+      setBusy(false);
+    }
+  };
   return (
     <div className="card" style={{ marginTop: 10, padding: 16, display: "flex", flexDirection: "column", alignItems: "center", gap: 12, textAlign: "center" }}>
       <Oni mood="restless" size={80} />
       <h2 className="display" style={{ fontSize: 26 }}>FEED ME CLOTHES</h2>
-      <p style={{ margin: 0, fontSize: 14, lineHeight: 1.5 }}>Your closet is empty. Lay 4–8 things flat, take a photo, and I'll pick tomorrow's outfit from what you own.</p>
-      <button type="button" className="btn shu press block" onClick={go}>
+      <p style={{ margin: 0, fontSize: 14, lineHeight: 1.5 }}>
+        {empty ? "Your closet is empty. Lay 4–8 things flat, take a photo, and I'll pick an outfit from what you own." : msg}
+      </p>
+      <button type="button" className="btn shu press block" onClick={() => ctx.go("scan")}>
         Scan my clothes →
       </button>
+      {empty && (
+        <button type="button" className="btn press block" disabled={busy} onClick={sample}>
+          {busy ? "Loading…" : "Try a sample closet"}
+        </button>
+      )}
     </div>
   );
 }

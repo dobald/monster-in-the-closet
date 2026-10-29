@@ -39,6 +39,7 @@ class Planning:
     def __init__(self, settings: Settings, cache: Cache, store: Store):
         self.settings, self.cache, self.store = settings, cache, store
         self._given: dict[str, dict[int, list[dict]]] = {}  # plan id -> look -> touches shown this session
+        self._building: set[str] = set()  # days with a plan being made ahead right now
 
     # -- inputs
 
@@ -90,14 +91,42 @@ class Planning:
 
     # -- morning plan
 
+    def basis(self, day: date) -> str:
+        """What a plan was built from, minus the weather: if this changes, a plan made ahead is out of date."""
+        snapshot = [(i["id"], i["tags"], i["last_worn"], i["wear_count"]) for i in sorted(self._garments(), key=lambda i: i["id"])]
+        return sha256(json.dumps([day.isoformat(), snapshot, [p["text"] for p in self.store.list_preferences()]],
+                                 sort_keys=True, default=str).encode())[:16]
+
+    def current_plan(self, day: date) -> dict | None:
+        """The latest plan for a day. A plan made ahead counts only while the closet is as it was then."""
+        record = self.store.get_plan(day=day.isoformat())
+        if record and record["trace"].get("prebuilt") and record["trace"].get("basis") != self.basis(day):
+            return None
+        return record
+
+    async def prebuild(self, day: date) -> None:
+        """Make the day's plan ahead of time (after a wear or a check-in), so the morning opens on it
+        instantly instead of waiting ~15s for the agent. Failures are quiet: the morning plans as usual."""
+        key = day.isoformat()
+        if key in self._building or planner.outfit_gap(self._garments()):
+            return
+        self._building.add(key)
+        try:
+            await self.make_plan(day, prebuilt=True)
+        except Exception:
+            pass
+        finally:
+            self._building.discard(key)
+
     async def make_plan(self, day: date, notes: str = "", lat: float | None = None, lon: float | None = None,
-                        fresh: bool = False) -> dict:
+                        fresh: bool = False, prebuilt: bool = False) -> dict:
         home = self.location()
         lat = home[0] if lat is None else lat
         lon = home[1] if lon is None else lon
         items = self._garments()
-        if not items:
-            raise ValueError("The wardrobe is empty: scan some clothes first.")
+        gap = planner.outfit_gap(items)
+        if gap:
+            raise ValueError(gap)
         prefs = self.store.list_preferences()
         weather = self.weather(day, lat, lon)
         calendar = self.calendar(day)
@@ -118,6 +147,8 @@ class Planning:
             trace, source = {"provider": "rules", "reason": "fixture mode",
                              "steps": planner.rule_steps(items, prefs, weather, calendar, notes, plan, "Fixture mode: no model calls")}, "rules"
 
+        plan = planner.distinct_looks(plan)
+        trace = {**trace, "basis": self.basis(day), **({"prebuilt": True} if prebuilt else {})}
         record = {"id": uuid.uuid4().hex[:12], "day": day.isoformat(), "created_at": now(), "source": source,
                   "plan": plan.model_dump(), "trace": trace, "weather": weather, "calendar": calendar, "notes": notes}
         self.store.add_plan(record)
@@ -191,7 +222,8 @@ class Planning:
             mood = "sleepy"
         else:
             mood = "restless" if pct < 25 else "calm" if pct <= 60 else "proud"
-        return {"mood": mood, "closet_alive_pct": pct, "garments": len(items),
+        # Without any wear history (logged or estimated) the % is a made-up number, so the app hides it.
+        return {"mood": mood, "closet_alive_pct": pct, "garments": len(items), "has_history": any(i["last_worn"] for i in items),
                 "forgotten": len(forgotten), "streak_days": streak}
 
     # -- evening check-in
@@ -240,8 +272,9 @@ class Planning:
 
     async def gaps(self, day: date, fresh: bool = False) -> dict:
         items = self._garments()
-        if not items:
-            raise ValueError("The wardrobe is empty: scan some clothes first.")
+        gap = planner.outfit_gap(items)
+        if gap:
+            raise ValueError(gap)
         prefs = self.store.list_preferences()
         thrift = self.store.list_thrift()
         watching = [t["name"] for t in thrift if t["status"] == "watching"]
