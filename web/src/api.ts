@@ -93,6 +93,7 @@ export interface Touch {
   needs: string[]; // basics keys, any one will do; empty for a technique
   owned: boolean;
   owned_label: string | null;
+  example_url: string | null; // a picture of the idea (AI-made, the same for everyone)
 }
 
 export interface ColourRead {
@@ -101,6 +102,7 @@ export interface ColourRead {
   contrast: string;
   temperature: string;
   idea: string;
+  plain: string; // the same read in everyday words, for the app
   palette: { item_id: string; name: string; hex: string; neutral: boolean }[];
 }
 
@@ -361,6 +363,8 @@ export const api = {
   latestPlan: () => call<Plan>("/api/plan"),
   makePlan: (notes = "", fresh = false) => call<Plan>("/api/plan", json("POST", { notes, fresh })),
   wear: (planId: string, look: number) => call<WearResult>(`/api/plans/${planId}/wear`, json("POST", { look })),
+  yesterday: () => call<{ plan: Plan | null }>("/api/yesterday"),
+  answerYesterday: (look: number | null) => call<{ worn: WearResult | null }>("/api/yesterday", json("POST", { look })),
   checkin: (a: CheckinAnswers) => call<CheckinResult>("/api/checkins", json("POST", a)),
   wardrobe: () => call<Item[]>("/api/wardrobe"),
   setLastWorn: (items: { id: string; days_ago: number | null }[]) =>

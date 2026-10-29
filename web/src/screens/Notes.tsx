@@ -82,7 +82,7 @@ export default function Notes({ ctx }: { ctx: AppCtx }) {
           <span className="label">YOUR SETUP · <span lang="ja">設定</span></span>
           <strong style={{ fontSize: 14 }}>{setup?.location?.name ?? "Toronto (default)"}</strong>
           <span className="small muted">
-            {setup ? { ics: `Calendar: ${setup.calendar_name ?? "your file"}`, sample: "Demo calendar", none: "No calendar" }[setup.calendar] : "…"}
+            {setup ? { ics: `Calendar: ${setup.calendar_name ?? "your file"}`, sample: "Demo calendar", none: "Just weather, no calendar" }[setup.calendar] : "…"}
           </span>
         </span>
         <span aria-hidden="true" style={{ fontWeight: 700 }}>Edit →</span>

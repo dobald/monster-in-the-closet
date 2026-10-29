@@ -73,6 +73,8 @@ def candidate_pairs(items: list[dict], cutout_dir: Path, focus: set[str] | None 
             continue
         if skip and tuple(sorted((a["id"], b["id"]))) in skip:
             continue
+        if a.get("source") and (a.get("source"), a.get("scan_id")) == (b.get("source"), b.get("scan_id")):
+            continue  # two pieces SAM cut from the same photo are two garments
         ga, gb = (CATEGORY_GROUP.get(x["tags"]["category"]) for x in (a, b))
         if ga != gb:
             continue

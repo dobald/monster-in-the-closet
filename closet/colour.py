@@ -95,7 +95,22 @@ def read(items: list[dict], cutout_dir: Path) -> dict:
 
     summary = f"{scheme} · {contrast} contrast · {temperature}"
     return {"palette": palette, "scheme": scheme, "contrast": contrast, "temperature": temperature,
-            "summary": summary, "idea_play": idea[0], "idea": idea[1]}
+            "summary": summary, "plain": plain(scheme, contrast, temperature, all_dark),
+            "idea_play": idea[0], "idea": idea[1]}
+
+
+PLAIN_SCHEME = {
+    "all neutral": "Easy neutrals", "neutral + accent": "Neutrals with one pop of colour", "tonal": "One colour family",
+    "analogous": "Neighbouring colours", "complementary": "Opposite colours", "contrasting": "Bold colour mix",
+}
+PLAIN_CONTRAST = {"high": "crisp light and dark", "medium": "", "low": "soft and blended"}
+
+
+def plain(scheme: str, contrast: str, temperature: str, all_dark: bool = False) -> str:
+    """The colour read in everyday words for the app; `summary` keeps the stylist's terms for the model."""
+    head = "All dark" if all_dark else PLAIN_SCHEME[scheme]
+    bits = [b for b in (PLAIN_CONTRAST[contrast] if not all_dark else "", "warm" if temperature == "warm" else "cool" if temperature == "cool" else "") if b]
+    return head + (", " + ", ".join(bits) if bits else "")
 
 
 def prompt_line(r: dict) -> str:

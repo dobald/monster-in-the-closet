@@ -2,6 +2,8 @@
 
 > It noticed I haven't worn 60% of my closet and dressed me in it for today, without me asking.
 
+**Every closet app wants to style you. This one is a monster that starves when your clothes go unworn.**
+
 A closet-first morning agent:
 1. Lay 4–8 items flat and snap one photo per batch.
 2. **SAM 3.1** cuts out every garment, and **Muse Spark** catalogs each one.
@@ -91,7 +93,7 @@ Docs: http://127.0.0.1:8000/docs
 - **Local data stays local.** The database, cutouts and cache live in `var/`, which git ignores.
 
 **Same garment, different photos.** Item ids hash the cutout, so one hoodie shot in two batches used to become two items. Every scan, and the Closet's "Find duplicates" button, now runs a cross-photo check:
-1. **Shortlist pairs cheaply:** compatible categories and a close measured colour (ΔE ≤ 20). On the real 11-item test closet this left 13 pairs.
+1. **Shortlist pairs cheaply:** compatible categories and a close measured colour (ΔE ≤ 20). Two pieces cut from the same photo are never paired, since SAM already separated them. On the real 11-item test closet this left 13 pairs.
 2. **Judge each pair:** Muse Spark 1.3 looks at both cutouts and writes down matching and conflicting details before giving a verdict. Verdicts are cached per pair.
 3. **Act on the verdict:**
    - At confidence ≥ 0.85 the two items merge. The cutout that shows the most garment is kept, wear history moves over, and the other cutout id becomes an alias, so a rescan doesn't bring it back.
@@ -149,11 +151,21 @@ When a check fails, the trace shows the failure and the repair round that fixed 
 - the item sheet
 - a Closet banner, shown when a third or more of your pieces have no history
 
-These answers are estimates. They never count as wears, a logged "Wear this" always replaces them, and an older guess never hides a newer logged wear. Wearing something estimated at "3–6 months ago" triggers the 救 rescue straight away.
+These answers are estimates. They never count as wears, a logged "Wear this" always replaces them, and an older guess never hides a newer logged wear. Wearing something estimated at "3–6 months ago" triggers the 救 rescue straight away. In getting started, **Not sure? Guess for me** fills every unanswered piece with "1–3 months ago".
+
+**"Did it make it out?" instead of logging every wear.** Logging wears by hand is homework nobody keeps up. So the morning after a plan was shown, Today opens with one question about it, for example "Did the dark blue straight-leg jeans make it out yesterday?":
+- **Yes, I wore it** logs yesterday's look, and any rescue counts.
+- **Look B / Look C** logs another pick from the same plan.
+- **No** stops asking.
+
+It's asked once, only about a plan that was actually on screen that day, and never when a wear was already logged. That one tap is also the number that matters for the idea behind the app: did a forgotten piece actually get worn?
+
+**The oni's rescue line.** Above each look, the oni says how long its most forgotten piece has waited, for example "Your dark blue straight-leg jeans have been in here about 400 days. Today they get out." It says "about" when the date is an estimate, and it goes quiet once the look is worn.
 
 | Endpoint | What it does |
 |---|---|
 | `POST /api/wardrobe/last-worn` | `{items: [{id, days_ago}]}`: estimated last-worn dates; `days_ago: null` clears an estimate |
+| `GET` / `POST /api/yesterday` | The morning question: yesterday's shown plan (or `null`), then `{look}` to log it or `{}` for "no" |
 
 **Finishing touches (仕上げ).** Each look gets 2–3 small moves that make it read as styled: an underlayer that just shows, a tuck or pushed sleeves, and an accessory or two. They come from a styling playbook in `closet/styling.py`, distilled from stylist and editorial guides:
 - **Layers only peek:** a hem a couple of centimetres below a knit, a collar out over a crewneck, long sleeves under a graphic tee, a turtleneck under a layer.
@@ -166,6 +178,10 @@ How it works:
 2. **The code checks the picks:** playbook ids only, at most one layer, one technique and two accessories, and no repeats of an earlier look's ideas.
 3. **The code works out what you own** from your checklist in Notes ("Things you own but don't scan": tees, shirts, jewellery, belts, socks, shoes). Anything you haven't ticked shows as "if you have one". It's never a shopping link.
 4. **The oni learns from your taps:** "I have this" ticks the basic, and "Not me" stops that touch.
+5. **Each touch has a picture of the idea.** That covers a tee hem peeking out, a front tuck, cuffed jeans over white socks, three silver rings, one accent colour, and so on.
+   - Tap the thumbnail to see it full size, marked as an AI example.
+   - `scripts/make_touch_examples.py` has Muse Image draw one picture per play (24 in all, about 25 cents). They're committed in `fixtures/touch_examples/`, so every closet shares them and no request waits on a render.
+   - Nobody's clothes or face are in them: worn ideas are shown on a faceless display mannequin, and accessories as flat-lays.
 
 Fixture mode uses a rule-based version of the same playbook.
 
@@ -176,7 +192,7 @@ Live (Muse Spark Open, 3–7s per look):
 
 **Colour read (配色) and "Got one?" (探して).** The styling research is written up in [docs/STYLE_GUIDE.md](docs/STYLE_GUIDE.md), with sources. It covers colour theory, layering, proportion and composition, texture, pattern, high/low formality, accessories and the capsule core.
 
-- **Colour read:** each look gets one, computed from each garment's measured colour rather than its tag. Navy, denim, browns, olive and greys count as neutrals. It names the scheme (all neutral, neutral plus accent, tonal, analogous, complementary or contrasting), the light/dark contrast and the warmth.
+- **Colour read:** each look gets one, computed from each garment's measured colour rather than its tag. The app shows it in everyday words ("Easy neutrals, crisp light and dark"), and the stylist's terms stay in the prompt and in the Everything view. Navy, denim, browns, olive and greys count as neutrals. It names the scheme (all neutral, neutral plus accent, tonal, analogous, complementary or contrasting), the light/dark contrast and the warmth.
 - **A colour move:** the read decides the look's one colour play:
   - a light break for head-to-toe dark
   - one accent colour for all-neutral looks
@@ -208,7 +224,7 @@ Settings in `.env`:
 
 ## Thrift (古着): gap finder and thrift list
 
-The only shopping the oni does is second-hand, and only for pieces that earn their place. Muse Spark Open reads the wardrobe, your learned preferences, the season and recent weather. It names the 3 pieces that would unlock the most new outfits with what you already own. For each piece it gives:
+Thrift is the last resort. The only shopping the oni does is second-hand, and only for pieces that earn their place. Each suggestion first says "Check your closet first: already own one? Scan it in", and the rules fallback never suggests a piece the closet already has. Muse Spark Open reads the wardrobe, your learned preferences, the season and recent weather. It names the 3 pieces that would unlock the most new outfits with what you already own. For each piece it gives:
 - the items it goes with
 - what to check on a thrift rack: the fabric content on the label, quality details and condition
 - a rough second-hand price
@@ -300,17 +316,18 @@ In the Claude desktop app, the `api-live` and `web-lan` launch configs do the sa
 
 ## Getting started
 
-The first time the app opens, it walks through seven short steps and saves as it goes, so leaving halfway loses nothing:
+The first time the app opens, it walks through six short steps and saves as it goes, so leaving halfway loses nothing:
 
 1. **Hello:** the oni introduces itself, with three promises: only what you own, dressed for your day, and second-hand first.
 2. **Where are you?** City search using Open-Meteo geocoding (free, no key), or "Use my location" where the browser allows it. There's an optional "I run cold / warm" choice, which seeds a preference the planner reads from day one.
-3. **What's on?** Upload an `.ics` export from Google or Apple Calendar, use the demo calendar, or skip. Only event titles, times and places are read, and the file stays in `var/private/`.
+3. **What's on?** "Just weather" is the default, since most people don't know what an `.ics` file is. You can also upload an `.ics` export from Google or Apple Calendar, or use the demo calendar. Only event titles, times and places are read, and the file stays in `var/private/`.
 4. **Feed me clothes:** a flat-lay guide (4–8 pieces, no overlaps, print side up), then scanning in batches. **Next** unlocks once there's at least a top and a bottom, or a dress.
    - A short note says where the photos go.
    - **No clothes handy? Try a sample closet** loads 9 made-up pieces instead, some unworn for months, so there is something to rescue straight away.
 5. **When did you last wear these?** A rough answer per piece, so forgotten clothes are visible from day one.
-6. **Who wears it?** The try-on setup, which can be skipped. Choosing the mannequin starts dressing your whole closet in the background.
-7. **Your first pick:** a real plan for today, with your weather and calendar. "See my day" finishes setup.
+6. **Your first pick:** a real plan for today, with your weather and calendar. "See my day" finishes setup.
+
+Who wears the try-on is asked the first time you tap **Try it on**, not during setup.
 
 Notes → **Your setup** reopens the flow from step 2, to change your city or calendar. The planner, thrift finder and check-ins now use the saved location and calendar; `.env` values are only the fallback before setup.
 

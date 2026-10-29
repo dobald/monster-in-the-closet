@@ -297,7 +297,7 @@ def touches_with_rules(items: list[dict], cold: bool, smart: bool, owned: set[st
     top = next((t for t in tags if t["category"] == "top"), None)
     bottom = next((t for t in tags if t["category"] == "bottom"), None)
     knit = top and any(w in top["subtype"].lower() for w in ("sweater", "sweatshirt", "knit", "jumper", "cardigan"))
-    tee = top and any(w in top["subtype"].lower() for w in ("tee", "t-shirt", "henley"))
+    tee = top and any(w in top["subtype"].lower() for w in ("tee", "t-shirt", "henley")) and "long" not in top["subtype"].lower()  # a long-sleeve tee needs no sleeve layer
     wide = bottom and any(w in bottom["fit"].lower() + bottom["subtype"].lower() for w in ("wide", "loose", "relaxed", "baggy"))
     loose_top = top and any(w in top["fit"].lower() for w in ("oversized", "boxy", "loose", "relaxed"))
     denim = bottom and any(w in bottom["subtype"].lower() for w in ("jean", "chino", "denim"))

@@ -382,7 +382,12 @@ def test_touches(var_dir: Path, run_dir: Path) -> None:
         r = c.get(f"/api/plans/{plan['id']}/touches", params={"look": 0}).json()
         ts = r["touches"]
         assert r["source"] == "rules" and 1 <= len(ts) <= 3, r
-        assert r["colour"]["summary"] and len(r["colour"]["palette"]) == len(plan["looks"][0]["item_ids"]), r["colour"]
+        assert all("example_url" in t for t in r["touches"]), "every touch says whether it has an example picture"
+        for t in r["touches"]:
+            if t["example_url"]:
+                assert c.get(t["example_url"]).headers["content-type"] == "image/jpeg"
+        assert c.get("/api/touch-examples/nope.jpg").status_code == 404
+        assert r["colour"]["summary"] and r["colour"]["plain"] and len(r["colour"]["palette"]) == len(plan["looks"][0]["item_ids"]), r["colour"]
         assert sum(t["kind"] == "colour" for t in ts) <= 1
         assert r["recall"] and "scan it in" in r["recall"]["text"].lower(), r["recall"]
         c.put("/api/style", json={"skip": [r["recall"]["id"]]})
@@ -431,8 +436,10 @@ def test_colour_and_recall(var_dir: Path) -> None:
 
     dark = colour.read([item("d1", (20, 20, 22), "black"), item("d2", (40, 30, 32), "dark brown", "bottom")], var_dir)
     assert dark["idea_play"] == "light_break" and dark["contrast"] == "low", dark
+    assert dark["plain"] == "All dark", dark["plain"]
     neutral = colour.read([item("n1", (225, 222, 215), "white"), item("n2", (60, 67, 78), "blue", "bottom")], var_dir)
     assert neutral["scheme"] == "all neutral" and neutral["contrast"] == "high" and neutral["idea_play"] == "accent_pop", neutral
+    assert neutral["plain"].startswith("Easy neutrals, crisp light and dark"), neutral["plain"]
     printed = colour.read([item("p1", (200, 200, 195), "white", pattern="graphic"), item("p2", (70, 70, 67), "charcoal", "bottom")], var_dir)
     assert printed["idea_play"] == "colour_echo", printed
     clash = colour.read([item("c1", (200, 40, 40), "red"), item("c2", (40, 160, 170), "teal", "bottom")], var_dir)
@@ -635,6 +642,47 @@ def test_sample_closet_and_prebuild(var_dir: Path) -> None:
         assert c.get("/api/plan", params={"day": "2026-10-29"}).status_code == 404, "a stale plan made ahead is dropped"
 
 
+def test_yesterday_question(var_dir: Path) -> None:
+    """The morning question: asked once about a plan that was shown, "no" just stops asking, "yes" logs the wear."""
+    from datetime import timedelta
+    from server.planning import today_local
+
+    y = (today_local() - timedelta(days=1)).isoformat()
+    with client_for("fixture", var_dir) as c:
+        c.post("/api/closet/sample")
+        assert c.get("/api/yesterday").json()["plan"] is None
+        plan = c.post("/api/plan", json={"day": y}).json()
+        assert c.get("/api/yesterday").json()["plan"] is None, "only a plan shown on its own day is asked about"
+
+        store = main.app.state.closets.get("main").store
+        store.put_setting("seen_plans", {y: plan["id"]})  # as if Today showed it yesterday
+        c.post("/api/plan")  # this morning's plan is shown first...
+        assert c.get("/api/yesterday").json()["plan"]["id"] == plan["id"], "...and yesterday's is still asked about"
+        assert c.post("/api/yesterday", json={}).json()["worn"] is None
+        assert c.get("/api/yesterday").json()["plan"] is None, "no means stop asking"
+        assert c.post("/api/yesterday", json={"look": 0}).status_code == 404
+
+        store.put_setting("asked_worn", {})
+        assert c.post("/api/yesterday", json={"look": 9}).status_code == 422
+        worn = c.post("/api/yesterday", json={"look": 0}).json()["worn"]
+        assert worn["day"] == y and worn["rescued"], worn
+        assert c.get("/api/yesterday").json()["plan"] is None, "a logged wear means nothing to ask"
+
+        today_plan = c.get("/api/plan").json()
+        assert c.get("/api/plan").json()["id"] == today_plan["id"], "yesterday's wear never swaps out today's plan"
+
+
+def test_same_photo_pairs(var_dir: Path) -> None:
+    """Two pieces cut from one photo are two garments: never shortlisted as duplicates."""
+    from closet import dedupe as cdedupe
+    var_dir.mkdir(parents=True, exist_ok=True)
+    for n in ("x", "y"):
+        cutout_png((30, 30, 30)).save(var_dir / f"{n}.png")
+    same = [{"id": "x", "source": "p.jpg", "scan_id": "s1", "tags": GARMENT}, {"id": "y", "source": "p.jpg", "scan_id": "s1", "tags": GARMENT}]
+    assert cdedupe.candidate_pairs(same, var_dir) == []
+    assert len(cdedupe.candidate_pairs([same[0], {**same[1], "source": "q.jpg"}], var_dir)) == 1
+
+
 def main_() -> None:
     tmp = Path(tempfile.mkdtemp(prefix="monster-test-"))
     run_dir = config.ROOT / "out" / f"_test_seed_{tmp.name}"
@@ -660,8 +708,10 @@ def main_() -> None:
         test_duplicates(tmp / "dupes")
         test_device_closets(tmp / "devices", run_dir)
         test_sample_closet_and_prebuild(tmp / "sample")
+        test_yesterday_question(tmp / "yesterday")
+        test_same_photo_pairs(tmp / "pairs")
         print("OK: fixture mode, seeding, tag fixes, caching, dedupe, planning, wear, check-ins, the agent loop, gap finder, try-on, layered try-on, getting started, finishing touches, colour reads, "
-              "cross-photo duplicates, per-device closets, the sample closet and plans made ahead all behave.")
+              "cross-photo duplicates, per-device closets, the sample closet, plans made ahead and the morning wear question all behave.")
     finally:
         shutil.rmtree(run_dir, ignore_errors=True)
         shutil.rmtree(tmp, ignore_errors=True)

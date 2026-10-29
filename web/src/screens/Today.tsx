@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, ApiError, idleDays, shortName, type Item, type Plan, type WeatherPart } from "../api";
+import { api, ApiError, idleDays, itemName, shortName, type Item, type Look, type Plan, type WeatherPart } from "../api";
 import type { AppCtx } from "../App";
 import Oni, { MOOD_LABEL } from "../Oni";
 import TraceSheet from "./Trace";
@@ -139,6 +139,9 @@ export default function Today({ ctx }: { ctx: AppCtx }) {
           {ctx.oni?.has_history && <AliveBar pct={ctx.oni.closet_alive_pct} />}
         </span>
       </button>
+
+      <Yesterday ctx={ctx} />
+      {load.state === "ready" && look && wornLook !== lookIndex && <RescueLine look={look} />}
 
       {load.state === "empty" && <EmptyCloset msg={load.msg} ctx={ctx} />}
       {load.state === "error" && (
@@ -299,6 +302,96 @@ export default function Today({ ctx }: { ctx: AppCtx }) {
 }
 
 // ------------------------------------------------------------------ pieces
+
+// The morning question: one tap instead of logging every wear. Asked once about yesterday's pick,
+// only when it was shown and nothing was logged. "Yes" counts the wear (and any rescue).
+function Yesterday({ ctx }: { ctx: AppCtx }) {
+  const [plan, setPlan] = useState<Plan | null>(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    api.yesterday().then((r) => setPlan(r.plan)).catch(() => {});
+  }, []);
+  if (!plan || !plan.looks.length) return null;
+
+  const hero = plan.looks[0];
+  const star = hero.items.find((i) => i.id === hero.rediscovered_id) ?? hero.items[0];
+  const answer = async (look: number | null) => {
+    setBusy(true);
+    try {
+      const { worn } = await api.answerYesterday(look);
+      setPlan(null);
+      const rescued = worn?.rescued ?? [];
+      ctx.toast(
+        !worn ? "No worries. I'll keep it in mind for another day."
+          : rescued.length > 1 ? `Rescued ${rescued.length} forgotten pieces at once. The oni is fed.`
+          : rescued.length ? `Rescued! Your ${rescued[0].name} got out after ${rescued[0].days} days.`
+          : "Logged. Thanks for wearing what you own.",
+      );
+      if (worn) ctx.bumpWardrobe();
+    } catch (e) {
+      ctx.toast((e as Error).message);
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section aria-label="Yesterday's outfit" className="card" style={{ padding: 12, display: "flex", flexDirection: "column", gap: 10, animation: "rise .3s ease-out both" }}>
+      <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+        <span style={{ display: "flex", flex: "none" }}>
+          {hero.items.slice(0, 3).map((it, i) => (
+            <span key={it.id} className="halftone" style={{ width: 40, height: 40, borderRadius: 8, border: "var(--line)", padding: 2, marginLeft: i ? -10 : 0, background: "var(--paper)" }}>
+              <img className="cutout" src={it.cutout_url} alt="" />
+            </span>
+          ))}
+        </span>
+        <strong style={{ fontSize: 15, lineHeight: 1.35 }}>
+          Did the {star ? itemName(star).toLowerCase() : "outfit"} make it out yesterday?
+        </strong>
+      </div>
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+        <button type="button" className="btn primary press" style={{ height: 38, fontSize: 13, flex: 1 }} disabled={busy} onClick={() => answer(0)}>
+          Yes, I wore it
+        </button>
+        <button type="button" className="btn press" style={{ height: 38, fontSize: 13, flex: 1 }} disabled={busy} onClick={() => answer(null)}>
+          No
+        </button>
+      </div>
+      {plan.looks.length > 1 && (
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+          <span className="small muted">Wore another pick?</span>
+          {plan.looks.slice(1).map((lk, n) => (
+            <button key={n} type="button" className="chip press" style={{ height: 28, fontSize: 12, padding: "0 10px" }} disabled={busy} onClick={() => answer(n + 1)}>
+              Look {LOOK_LETTERS[n + 1]}: {lk.items.slice(0, 2).map(shortName).join(" + ")}
+            </button>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+// Garments English treats as plural ("the jeans have"), for the oni's sentences.
+const PLURAL = /(pants|jeans|trousers|shorts|chinos|leggings|joggers|sweatpants|overalls|sneakers|trainers|boots|shoes|socks)$/i;
+
+// The oni's voice over the look: how long its most forgotten piece has waited. Estimates say "about".
+function RescueLine({ look }: { look: Look }) {
+  const ranked = look.items.map((i) => ({ i, d: idleDays(i) })).sort((a, b) => b.d - a.d);
+  const top = ranked[0];
+  if (!top || top.d < 30) return null;
+  const days = `${top.i.worn_estimated ? "about " : ""}${top.d} days`;
+  return (
+    <p
+      aria-live="polite"
+      style={{
+        margin: "2px 0 -6px", alignSelf: "flex-start", border: "var(--line)", borderRadius: "2px 12px 12px 12px", padding: "8px 12px",
+        background: "var(--washi)", fontSize: 14, lineHeight: 1.45, fontWeight: 500, animation: "rise .3s ease-out both",
+      }}
+    >
+      Your <strong>{itemName(top.i).toLowerCase()}</strong> {PLURAL.test(top.i.tags?.subtype ?? "") ? "have" : "has"} been in here {days}. Today{" "}
+      {PLURAL.test(top.i.tags?.subtype ?? "") ? "they get" : "it gets"} out.
+    </p>
+  );
+}
 
 function partNow(plan: Plan): [string, WeatherPart] | null {
   const parts = plan.weather.parts;

@@ -330,6 +330,7 @@ async def make_plan(body: PlanIn | None = None) -> dict:
         record = await C().planning.make_plan(body.day or today_local(), body.notes, body.lat, body.lon, body.fresh)
     except ValueError as e:
         raise HTTPException(409, str(e))
+    C().planning.mark_seen(record)
     return _plan_out(record)
 
 
@@ -338,7 +339,34 @@ def latest_plan(day: date | None = None) -> dict:
     record = C().planning.current_plan(day or today_local())
     if not record:
         raise HTTPException(404, "No plan for that day yet; POST /api/plan.")
+    C().planning.mark_seen(record)
     return _plan_out(record)
+
+
+class YesterdayIn(BaseModel):
+    look: int | None = None  # the look they wore, or None for "no, something else"
+
+
+@app.get("/api/yesterday")
+def yesterday() -> dict:
+    """The morning question: did yesterday's pick make it out? `plan` is null when there's nothing to ask
+    (no plan was shown yesterday, a wear was already logged, or it was answered)."""
+    record = C().planning.yesterday(today_local())
+    return {"plan": _plan_out(record) if record else None}
+
+
+@app.post("/api/yesterday")
+def answer_yesterday(body: YesterdayIn, background: BackgroundTasks) -> dict:
+    """One tap instead of logging: wear yesterday's look (with rescues counted), or just stop asking."""
+    try:
+        worn = C().planning.answer_yesterday(today_local(), body.look)
+    except KeyError as e:
+        raise HTTPException(404, str(e))
+    except IndexError as e:
+        raise HTTPException(422, str(e))
+    if worn:
+        background.add_task(C().planning.prebuild, today_local() + timedelta(days=1))
+    return {"worn": worn}
 
 
 @app.post("/api/plans/{plan_id}/wear")
@@ -553,6 +581,16 @@ def tryon_job(job_id: str) -> dict:
     if not job:
         raise HTTPException(404, "No such try-on job (the server may have restarted).")
     return job
+
+
+@app.get("/api/touch-examples/{play}.jpg")
+def touch_example(play: str) -> FileResponse:
+    """The example picture for a finishing-touch play: the same for everyone, so it caches for a week."""
+    from .planning import TOUCH_EXAMPLES
+    path = TOUCH_EXAMPLES / f"{play}.jpg"
+    if not play.replace("_", "").isalpha() or not path.exists():
+        raise HTTPException(404, "No such example.")
+    return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "public, max-age=604800"})
 
 
 @app.get("/api/renders/{name}.png")

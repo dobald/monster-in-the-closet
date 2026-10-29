@@ -105,7 +105,7 @@ export default function Thrift({ ctx }: { ctx: AppCtx }) {
         <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
           <h1 className="display" style={{ fontSize: 56 }}>THRIFT</h1>
           <span style={{ fontSize: 13, fontWeight: 500, lineHeight: 1.4, maxWidth: 270 }}>
-            The few pieces that would unlock the most outfits with what you own. Find them second-hand.
+            The last resort. Only when one piece would unlock lots of new outfits with what you own, and only second-hand.
           </span>
         </div>
         <span lang="ja" aria-hidden="true" className="vertical" style={{ fontSize: 26 }}>
@@ -220,8 +220,8 @@ function GapCard({ piece: p, index, onList, onWatch, onDismiss, example, ctx }: 
               <span className="spinner-dots">Sketching an example</span>
             </span>
           ) : (
-            // Tops come back landscape, trousers portrait: let the photo set the frame, capped in height.
-            <img src={example} alt={`Example of a ${p.name.toLowerCase()}`} style={{ width: "100%", maxHeight: 340, objectFit: "cover", animation: "fade .3s ease-out both" }} />
+            // A small hint of what to look for, not a product shot: the whole photo, at most 180px tall, whatever its shape.
+            <img src={example} alt={`Example of a ${p.name.toLowerCase()}`} style={{ display: "block", maxWidth: "100%", maxHeight: 180, objectFit: "contain", animation: "fade .3s ease-out both" }} />
           )}
           <figcaption className="label" style={{ position: "absolute", left: 8, bottom: 8, background: "var(--washi)", color: "var(--sumi)", border: "var(--line)", borderRadius: 4, padding: "2px 6px", fontSize: 9 }}>
             EXAMPLE · AI-MADE · <span lang="ja">例</span>
@@ -297,6 +297,14 @@ function GapCard({ piece: p, index, onList, onWatch, onDismiss, example, ctx }: 
         </span>
       </div>
 
+      <button
+        type="button"
+        onClick={() => ctx.go("scan")}
+        className="small"
+        style={{ alignSelf: "flex-start", border: 0, background: "none", padding: 0, textDecoration: "underline", color: "inherit", fontWeight: 700 }}
+      >
+        Check your closet first: already own one? Scan it in
+      </button>
       <div style={{ display: "flex", gap: 10, paddingRight: 3 }}>
         <button type="button" className="btn press" style={{ flex: 1, height: 44 }} onClick={onDismiss}>
           Not for me

@@ -123,49 +123,60 @@ def find_gaps_with_agent(items: list[dict], prefs: list[dict], today: date, weat
 # A few versatile staples per category; the first one not already owned and not dismissed wins.
 STAPLES: dict[str, list[dict]] = {
     "outerwear": [
-        {"name": "Wool overcoat", "colors": ["camel"], "look_for": "Check the label for 70%+ wool, a full lining "
+        {"name": "Wool overcoat", "owns": ["coat", "overcoat"], "colors": ["camel"], "look_for": "Check the label for 70%+ wool, a full lining "
          "and shoulders that sit at yours. Skip pilling under the arms.", "price_range": "$30-80",
          "search_terms": ["wool overcoat camel", "vintage wool coat"]},
-        {"name": "Denim jacket", "colors": ["mid blue"], "look_for": "Look for heavy 100% cotton denim, metal "
+        {"name": "Denim jacket", "owns": ["denim", "jean", "trucker"], "colors": ["mid blue"], "look_for": "Look for heavy 100% cotton denim, metal "
          "buttons and even fading; avoid stretch denim.", "price_range": "$15-40",
          "search_terms": ["vintage denim jacket", "trucker jacket"]},
     ],
     "bottom": [
-        {"name": "Straight dark jeans", "colors": ["indigo"], "look_for": "Rigid or low-stretch cotton, a clean "
+        {"name": "Straight dark jeans", "owns": ["jean", "denim"], "colors": ["indigo"], "look_for": "Rigid or low-stretch cotton, a clean "
          "dark wash and an intact hem; check the crotch for wear.", "price_range": "$15-35",
          "search_terms": ["dark straight jeans", "raw denim straight"]},
-        {"name": "Pleated wool trousers", "colors": ["grey"], "look_for": "Wool or wool blend with a lining to "
+        {"name": "Pleated wool trousers", "owns": ["trouser", "slack"], "colors": ["grey"], "look_for": "Wool or wool blend with a lining to "
          "the knee; check the seat and pockets for shine.", "price_range": "$15-40",
          "search_terms": ["pleated wool trousers", "vintage wool pants grey"]},
     ],
     "top": [
-        {"name": "Oxford shirt", "colors": ["light blue"], "look_for": "100% cotton oxford cloth, a button-down "
+        {"name": "Oxford shirt", "owns": ["oxford", "button-down", "button down", "dress shirt"], "colors": ["light blue"], "look_for": "100% cotton oxford cloth, a button-down "
          "collar and a clean, unfrayed collar edge.", "price_range": "$10-25",
          "search_terms": ["oxford button down shirt", "vintage oxford shirt"]},
-        {"name": "Merino crewneck", "colors": ["navy"], "look_for": "100% merino or lambswool on the label; hold "
+        {"name": "Merino crewneck", "owns": ["sweater", "jumper", "merino", "knit"], "colors": ["navy"], "look_for": "100% merino or lambswool on the label; hold "
          "it to the light for thin spots and check the elbows.", "price_range": "$12-35",
          "search_terms": ["merino crewneck sweater", "lambswool jumper"]},
     ],
 }
 
 
+PLURAL = {"outerwear": "layers", "top": "tops", "bottom": "bottoms"}
+
+
 def find_gaps_with_rules(items: list[dict], dismissed: list[str], watching: list[str]) -> GapReport:
-    """Whichever category is thinnest gets a versatile staple that pairs with everything opposite it."""
+    """Whichever category is thinnest gets a versatile staple that pairs with everything opposite it.
+    Never one the closet already has: suggesting a second pair of dark jeans to someone who owns
+    them is exactly the shopping app this isn't."""
     skip = {n.lower() for n in dismissed + watching}
     cats = Counter(i["tags"]["category"] for i in items)
     ids = lambda *c: [i["id"] for i in items if i["tags"]["category"] in c]  # noqa: E731
+
+    def owned(cat: str, staple: dict) -> bool:
+        return any(i["tags"]["category"] == cat and any(w in i["tags"]["subtype"].lower() for w in staple["owns"]) for i in items)
+
     pieces = []
     for cat in sorted(STAPLES, key=lambda c: cats[c]):
-        staple = next((s for s in STAPLES[cat] if s["name"].lower() not in skip), None)
+        staple = next((s for s in STAPLES[cat] if s["name"].lower() not in skip and not owned(cat, s)), None)
         if not staple:
             continue
         pairs = ids("top", "bottom") if cat == "outerwear" else ids("bottom") if cat == "top" else ids("top")
         if len(pairs) < 2:
             continue
-        why = {"outerwear": "Nothing to wear over your outfits yet. One good layer covers every cold morning.",
-               "bottom": "Your tops outnumber your bottoms. One more pair doubles your options.",
+        why = {"outerwear": ("Nothing to wear over your outfits yet. One good layer covers every cold morning." if not cats["outerwear"]
+                             else "A second layer means one for cold mornings and one for the in-between days."),
+               "bottom": ("Your tops outnumber your bottoms. One more pair doubles your options." if cats["top"] > cats["bottom"]
+                          else "One more bottom gives every top a new partner."),
                "top": "Your bottoms need more tops to rotate with."}[cat]
-        pieces.append(GapPiece(category=cat, pairs_with=pairs, why=why, **staple))
+        pieces.append(GapPiece(category=cat, pairs_with=pairs, why=why, **{k: v for k, v in staple.items() if k != "owns"}))
     thin = min(STAPLES, key=lambda c: cats[c])
-    summary = "Nothing to wear over your outfits yet." if cats["outerwear"] == 0 else f"Fewest {thin}s in the closet."
+    summary = "Nothing to wear over your outfits yet." if cats["outerwear"] == 0 else f"Your closet is lightest on {PLURAL[thin]}."
     return GapReport(summary=summary, pieces=pieces)

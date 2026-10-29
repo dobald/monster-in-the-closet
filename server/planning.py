@@ -21,11 +21,12 @@ from .settings import Settings
 from .store import Store, now
 
 PLAN_VERSION = "plan1"
-GAP_VERSION = "gaps1"
+GAP_VERSION = "gaps2"
 TOUCH_VERSION = "touch3"
 COLD_C = 8  # feels-like at or below this is "cold" for scarves, beanies and long-sleeve layers
 ALIVE_WINDOW_DAYS = 30
 RESCUE_DAYS = 30
+TOUCH_EXAMPLES = config.ROOT / "fixtures" / "touch_examples"  # one picture per play, scripts/make_touch_examples.py
 
 # Used only in fixture mode before any real forecast has been recorded.
 CANNED_WEATHER = {"date": None, "location": None, "parts": {
@@ -110,6 +111,8 @@ class Planning:
         key = day.isoformat()
         if key in self._building or planner.outfit_gap(self._garments()):
             return
+        if day <= today_local() and self.store.get_plan(day=key):
+            return  # never swap out a plan someone may be looking at; only future days are rebuilt
         self._building.add(key)
         try:
             await self.make_plan(day, prebuilt=True)
@@ -168,6 +171,32 @@ class Planning:
         plan = planner.plan_with_rules(items, weather, calendar, notes, day)
         steps = planner.rule_steps(items, prefs, weather, calendar, notes, plan, "The models didn't answer, so the rules stepped in")
         return plan, {"provider": "rules", "failures": failures, "steps": steps}, "rules"
+
+    # -- "did it make it out?": one tap the next morning instead of logging every wear
+
+    def mark_seen(self, record: dict) -> None:
+        """Remember the plan shown on its own day, so tomorrow's question is about what they actually saw."""
+        if record["day"] == today_local().isoformat():
+            # One entry per day: this morning's visit must not overwrite yesterday's before it's asked about.
+            seen = {**(self.store.get_setting("seen_plans") or {}), record["day"]: record["id"]}
+            self.store.put_setting("seen_plans", dict(sorted(seen.items())[-3:]))
+
+    def yesterday(self, today: date) -> dict | None:
+        """Yesterday's plan, if it was shown, nothing was logged that day, and we haven't asked yet."""
+        day = (today - timedelta(days=1)).isoformat()
+        plan_id = (self.store.get_setting("seen_plans") or {}).get(day)
+        if not plan_id or self.store.worn_on(day) or (self.store.get_setting("asked_worn") or {}).get("day") == day:
+            return None
+        return self.store.get_plan(plan_id=plan_id)
+
+    def answer_yesterday(self, today: date, look: int | None) -> dict | None:
+        """Log yesterday's look (or nothing, for "no"), and never ask about that day again."""
+        record = self.yesterday(today)
+        if not record:
+            raise KeyError("Nothing to ask about yesterday.")
+        worn = None if look is None else self.wear(record["id"], look, date.fromisoformat(record["day"]))
+        self.store.put_setting("asked_worn", {"day": record["day"]})  # after the wear, so a bad look index can be retried
+        return worn
 
     # -- wearing an outfit
 
@@ -349,7 +378,7 @@ class Planning:
         plans_note = ", ".join(f"{e['start']} {e['title']}" + (f" ({e['dress_code']})" if e.get("dress_code") else "") for e in events) or "No plans"
         read = colour.read(items, self.settings.cutout_dir)
         recall = styling.recall_for(self._garments(), cold, smart, skip, look_index)
-        colour_out = {k: read[k] for k in ("summary", "scheme", "contrast", "temperature", "idea")}
+        colour_out = {k: read[k] for k in ("summary", "plain", "scheme", "contrast", "temperature", "idea")}
         colour_out["palette"] = [{k: p[k] for k in ("item_id", "name", "hex", "neutral")} for p in read["palette"]]
 
         # Touches already given for this plan's earlier looks, so each look gets its own ideas. Earlier only:
@@ -360,7 +389,8 @@ class Planning:
         hit = self.cache.get("touches", key)
         if hit:
             self._given.setdefault(plan_id, {})[look_index] = hit["touches"]
-            return {**hit, "trace": {**hit["trace"], "cached": True}}
+            # The colour read is measured, not generated: always the current one, so older cache entries pick up new fields.
+            return {**hit, "touches": with_examples(hit["touches"]), "colour": colour_out, "trace": {**hit["trace"], "cached": True}}
 
         touches, trace, source, recall_text = [], {"failures": []}, "rules", ""
         if self.settings.live:
@@ -388,7 +418,13 @@ class Planning:
         if source == "agent":
             self.cache.put("touches", key, out)
         self._given.setdefault(plan_id, {})[look_index] = touches
-        return out
+        return {**out, "touches": with_examples(touches)}
+
+
+def with_examples(touches: list[dict]) -> list[dict]:
+    """Each touch with its example picture, when the playbook has one."""
+    return [{**t, "example_url": f"/api/touch-examples/{t['play']}.jpg" if (TOUCH_EXAMPLES / f"{t['play']}.jpg").exists() else None}
+            for t in touches]
 
 
 def today_local() -> date:

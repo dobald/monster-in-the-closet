@@ -17,6 +17,7 @@ export default function Touches({ plan, lookIndex, ctx }: { plan: Plan; lookInde
   const key = `${plan.id}:${lookIndex}`;
   const [byLook, setByLook] = useState<Record<string, TouchesOut | "loading" | "error">>({});
   const [style, setStyle] = useState<Style | null>(null);
+  const [zoom, setZoom] = useState<Touch | null>(null); // the example picture opened full size
 
   const load = (fresh = false) => {
     if (!fresh && byLook[key]) return;
@@ -39,7 +40,8 @@ export default function Touches({ plan, lookIndex, ctx }: { plan: Plan; lookInde
     const next = await api.updateStyle({ basics: [...new Set([...style.basics, t.needs[0]])] });
     setStyle(next);
     const label = next.catalog.flatMap((g) => g.items).find((i) => i.key === t.needs[0])?.label ?? "it";
-    ctx.toast(`Noted: you have ${label.toLowerCase()}. The oni will lean on it.`);
+    const article = /s$/i.test(label) ? "" : /^[aeiou]/i.test(label) ? "an " : "a "; // "silver rings", "a belt", "an undershirt"
+    ctx.toast(`Noted: you have ${article}${label.toLowerCase()}. The oni will lean on it.`);
     setByLook((b) => {
       const cur = b[key] as TouchesOut;
       return { ...b, [key]: { ...cur, touches: cur.touches.map((x) => (x.play === t.play ? { ...x, owned: true, owned_label: label } : x)) } };
@@ -73,8 +75,13 @@ export default function Touches({ plan, lookIndex, ctx }: { plan: Plan; lookInde
               <span key={p.item_id} title={`${p.name} ${p.hex}`} style={{ width: 22, height: 22, borderRadius: "50%", border: "var(--line)", background: p.hex, marginLeft: i ? -6 : 0 }} />
             ))}
           </span>
-          <span className="label">
-            <span lang="ja">配色</span> · {ready.colour.summary.toUpperCase()}
+          <span style={{ display: "flex", flexDirection: "column", gap: 1 }}>
+            <strong style={{ fontSize: 13 }}>{ready.colour.plain}</strong>
+            {ctx.view === "full" && (
+              <span className="label muted" style={{ fontWeight: 400, fontSize: 9 }}>
+                <span lang="ja">配色</span> · {ready.colour.summary.toUpperCase()}
+              </span>
+            )}
           </span>
         </div>
       )}
@@ -92,17 +99,32 @@ export default function Touches({ plan, lookIndex, ctx }: { plan: Plan; lookInde
       ) : (
         <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexDirection: "column", gap: 8 }}>
           {state.touches.map((t, i) => (
-            <li key={t.play} style={{ display: "grid", gridTemplateColumns: "40px 1fr", gap: 10, animation: `rise .3s ease-out ${i * 0.08}s both` }}>
-              <span
-                aria-hidden="true"
-                style={{
-                  width: 40, height: 40, borderRadius: 8, border: "var(--line)", display: "flex", flexDirection: "column",
-                  alignItems: "center", justifyContent: "center", background: t.kind === "underlayer" ? "var(--paper)" : "var(--washi)",
-                }}
-              >
-                <span lang="ja" style={{ fontFamily: "var(--display)", fontSize: 13, lineHeight: 1 }}>{KIND[t.kind].ja}</span>
-                <span className="label" style={{ fontSize: 7 }}>{KIND[t.kind].en}</span>
-              </span>
+            <li key={t.play} style={{ display: "grid", gridTemplateColumns: t.example_url ? "72px 1fr" : "40px 1fr", gap: 10, animation: `rise .3s ease-out ${i * 0.08}s both` }}>
+              {t.example_url ? (
+                <button
+                  type="button"
+                  className="press"
+                  aria-label={`See an example: ${t.name}`}
+                  onClick={() => setZoom(t)}
+                  style={{ position: "relative", width: 72, height: 72, padding: 0, borderRadius: 8, border: "var(--line)", overflow: "hidden", background: "var(--paper)" }}
+                >
+                  <img src={t.example_url} alt="" loading="lazy" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
+                  <span className="label" style={{ position: "absolute", left: 0, right: 0, bottom: 0, fontSize: 7, padding: "2px 0", background: "var(--washi)", color: "var(--sumi)", borderTop: "var(--line)" }}>
+                    {KIND[t.kind].en}
+                  </span>
+                </button>
+              ) : (
+                <span
+                  aria-hidden="true"
+                  style={{
+                    width: 40, height: 40, borderRadius: 8, border: "var(--line)", display: "flex", flexDirection: "column",
+                    alignItems: "center", justifyContent: "center", background: t.kind === "underlayer" ? "var(--paper)" : "var(--washi)",
+                  }}
+                >
+                  <span lang="ja" style={{ fontFamily: "var(--display)", fontSize: 13, lineHeight: 1 }}>{KIND[t.kind].ja}</span>
+                  <span className="label" style={{ fontSize: 7 }}>{KIND[t.kind].en}</span>
+                </span>
+              )}
               <span style={{ display: "flex", flexDirection: "column", gap: 3, minWidth: 0 }}>
                 <strong style={{ fontSize: 14, lineHeight: 1.35 }}>{t.suggestion}</strong>
                 <span className="small muted">{t.why}</span>
@@ -128,6 +150,7 @@ export default function Touches({ plan, lookIndex, ctx }: { plan: Plan; lookInde
           ))}
         </ul>
       )}
+      {zoom?.example_url && <ExampleSheet touch={zoom} onClose={() => setZoom(null)} />}
       {ready?.recall && (
         <div
           style={{
@@ -150,6 +173,38 @@ export default function Touches({ plan, lookIndex, ctx }: { plan: Plan; lookInde
         </div>
       )}
     </section>
+  );
+}
+
+// The example picture full size: what the idea looks like, clearly marked as an AI example.
+function ExampleSheet({ touch, onClose }: { touch: Touch; onClose: () => void }) {
+  useEffect(() => {
+    const esc = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    window.addEventListener("keydown", esc);
+    return () => window.removeEventListener("keydown", esc);
+  }, [onClose]);
+  return (
+    <div className="overlay" role="dialog" aria-modal="true" aria-label={`Example: ${touch.name}`} onClick={onClose}>
+      <div className="sheet" onClick={(e) => e.stopPropagation()} style={{ gap: 10 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <span className="label">
+            {KIND[touch.kind].en} · <span lang="ja">{KIND[touch.kind].ja}</span>
+          </span>
+          <button type="button" className="icon-btn press" aria-label="Close" onClick={onClose}>
+            ×
+          </button>
+        </div>
+        <figure style={{ margin: 0, position: "relative", border: "var(--line)", borderRadius: 10, overflow: "hidden", background: "var(--paper)" }}>
+          <img src={touch.example_url!} alt={`Example of ${touch.name.toLowerCase()}`} style={{ width: "100%", display: "block" }} />
+          <figcaption className="label" style={{ position: "absolute", left: 8, bottom: 8, background: "var(--washi)", color: "var(--sumi)", border: "var(--line)", borderRadius: 4, padding: "2px 6px", fontSize: 9 }}>
+            EXAMPLE · AI-MADE · <span lang="ja">例</span>
+          </figcaption>
+        </figure>
+        <strong style={{ fontSize: 17 }}>{touch.name}</strong>
+        <span style={{ fontSize: 14, lineHeight: 1.5 }}>{touch.suggestion}</span>
+        <span className="small muted">{touch.why}</span>
+      </div>
+    </div>
   );
 }
 

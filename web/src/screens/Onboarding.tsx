@@ -3,21 +3,19 @@ import { api, ApiError, itemName, type Item, type Place, type Plan, type Profile
 import type { AppCtx } from "../App";
 import Oni from "../Oni";
 import { LastWornList } from "./LastWorn";
-import { Setup } from "./TryOn";
 
 // Getting started: meet the oni, then give it the things it needs to dress you (where you are,
-// what's on today, what you own and roughly when you last wore it), optionally who wears the try-on, and end on a real first
-// pick. Every step saves as you go, so leaving halfway loses nothing; "editing" reopens it from
+// what's on today, what you own and roughly when you last wore it), and end on a real first pick.
+// Who wears the try-on is asked the first time someone taps "Try it on", not here. Every step saves as you go, so leaving halfway loses nothing; "editing" reopens it from
 // the location step (Notes → Your setup).
 
-type Step = "hello" | "place" | "day" | "closet" | "history" | "wearer" | "first";
+type Step = "hello" | "place" | "day" | "closet" | "history" | "first";
 const STEPS: { id: Step; en: string; ja: string }[] = [
   { id: "hello", en: "HELLO", ja: "はじめまして" },
   { id: "place", en: "WEATHER", ja: "天気" },
   { id: "day", en: "YOUR DAY", ja: "予定" },
   { id: "closet", en: "CLOSET", ja: "服" },
   { id: "history", en: "LAST WORN", ja: "思い出" },
-  { id: "wearer", en: "TRY-ON", ja: "試着" },
   { id: "first", en: "FIRST PICK", ja: "最初のコーデ" },
 ];
 
@@ -84,7 +82,6 @@ export default function Onboarding({ ctx, editing, onDone }: { ctx: AppCtx; edit
           {step === "day" && <DayStep profile={profile} ctx={ctx} onNext={next} />}
           {step === "closet" && <ClosetStep profile={profile} ctx={ctx} onChange={refresh} onNext={next} />}
           {step === "history" && <HistoryStep ctx={ctx} onNext={next} />}
-          {step === "wearer" && <WearerStep profile={profile} ctx={ctx} onNext={next} />}
           {step === "first" && <FirstPick profile={profile} ctx={ctx} editing={editing} onScan={() => setStep("closet")} onDone={onDone} />}
         </div>
       )}
@@ -161,7 +158,8 @@ function Hello({ profile, onNext }: { profile: Profile; onNext: () => void }) {
       <div style={{ display: "flex", gap: 12, alignItems: "flex-end" }}>
         <Oni mood={has ? "calm" : "restless"} size={88} />
         <Bubble>
-          I'm the oni who lives in your closet. I eat <strong>forgotten clothes</strong>, so every morning I'll dress you from what you already own.
+          Every closet app wants to style you. I'm the monster in yours, and I <strong>starve when your clothes go unworn</strong>. So every
+          morning I dress you from what you already own, forgotten pieces first.
         </Bubble>
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
@@ -302,7 +300,8 @@ function PlaceStep({ profile, ctx, onNext }: { profile: Profile; ctx: AppCtx; on
 // ------------------------------------------------------------------ 3. your day
 
 function DayStep({ profile, ctx, onNext }: { profile: Profile; ctx: AppCtx; onNext: () => void }) {
-  const [kind, setKind] = useState(profile.calendar);
+  // First run defaults to "just weather": most people don't know what an .ics file is. Editing keeps the saved choice.
+  const [kind, setKind] = useState<Profile["calendar"]>(profile.onboarded || profile.calendar === "ics" ? profile.calendar : "none");
   const [fileName, setFileName] = useState(profile.calendar_name);
   const [uploaded, setUploaded] = useState<{ events: number; today: string[] } | null>(null);
   const [busy, setBusy] = useState(false);
@@ -339,6 +338,7 @@ function DayStep({ profile, ctx, onNext }: { profile: Profile; ctx: AppCtx; onNe
     <>
       <Title en="WHAT'S ON?" ja="予定" sub="I dress you for your plans too: a crit, a dinner out, a date." />
       <div role="radiogroup" aria-label="Calendar" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        <Option on={kind === "none"} title="Just weather" sub="No calendar needed. You can add one later in Notes." onPick={() => setKind("none")} />
         <Option on={kind === "ics"} title="Add my calendar" sub="An .ics file from Google Calendar or Apple Calendar." onPick={() => setKind("ics")}>
           <span className="small">
             Google: Settings → Import &amp; export → Export, then unzip. Apple: File → Export → Export.
@@ -355,7 +355,6 @@ function DayStep({ profile, ctx, onNext }: { profile: Profile; ctx: AppCtx; onNe
           )}
         </Option>
         <Option on={kind === "sample"} title="Use the demo calendar" sub="A studio crit at 10:00 and dinner outside at 19:00, every day." onPick={() => setKind("sample")} />
-        <Option on={kind === "none"} title="No calendar" sub="Just weather. You can add one later in Notes." onPick={() => setKind("none")} />
       </div>
       <span className="small muted">Only event titles, times and places are read. The file stays in your closet's private storage.</span>
       <Footer>
@@ -532,6 +531,19 @@ function HistoryStep({ ctx, onNext }: { ctx: AppCtx; onNext: () => void }) {
     api.wardrobe().then(setItems).catch((e) => ctx.toast((e as Error).message));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+  // "A while ago" for everything without an answer yet: good enough for the oni to start rescuing, and fixable later.
+  const guess = async () => {
+    const open = (items ?? []).filter((i) => !i.last_worn);
+    try {
+      if (open.length) {
+        await api.setLastWorn(open.map((i) => ({ id: i.id, days_ago: 60 })));
+        ctx.bumpWardrobe();
+      }
+    } catch (e) {
+      ctx.toast((e as Error).message);
+    }
+    onNext();
+  };
   return (
     <>
       <Title en="WHEN DID YOU LAST WEAR THESE?" ja="思い出" sub="A rough guess is fine. It's how I know what you've forgotten, so I can bring it back." />
@@ -552,38 +564,14 @@ function HistoryStep({ ctx, onNext }: { ctx: AppCtx; onNext: () => void }) {
           }}
         />
       )}
-      <button type="button" onClick={onNext} className="small" style={{ border: 0, background: "none", textDecoration: "underline", color: "inherit", alignSelf: "center", padding: 4 }}>
-        Skip for now
+      <button type="button" onClick={guess} className="small" style={{ border: 0, background: "none", textDecoration: "underline", color: "inherit", alignSelf: "center", padding: 4 }}>
+        Not sure? Guess for me
       </button>
     </>
   );
 }
 
-// ------------------------------------------------------------------ 6. who wears it
-
-function WearerStep({ profile, ctx, onNext }: { profile: Profile; ctx: AppCtx; onNext: () => void }) {
-  return (
-    <>
-      <Setup
-        profile={profile.tryon}
-        ctx={ctx}
-        cta="Save & continue →"
-        onSaved={async (p) => {
-          // Dress the mannequin with the closet in the background, so try-on is instant later.
-          if (p.mode === "mannequin" && p.ready) {
-            api.wardrobe().then((items) => api.tryonLayers(items.map((i) => i.id), true)).catch(() => {});
-          }
-          onNext();
-        }}
-      />
-      <button type="button" onClick={onNext} className="small" style={{ border: 0, background: "none", textDecoration: "underline", color: "inherit", alignSelf: "center", padding: 4 }}>
-        Skip try-on for now
-      </button>
-    </>
-  );
-}
-
-// ------------------------------------------------------------------ 7. first pick
+// ------------------------------------------------------------------ 6. first pick
 
 function FirstPick({ profile, ctx, editing, onScan, onDone }: { profile: Profile; ctx: AppCtx; editing: boolean; onScan: () => void; onDone: () => void }) {
   const [plan, setPlan] = useState<Plan | null>(null);
