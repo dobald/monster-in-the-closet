@@ -79,6 +79,8 @@ export default function Today({ ctx }: { ctx: AppCtx }) {
 
   const now = new Date();
   const look = plan?.looks[lookIndex];
+  const stretch = plan?.trace.stretch?.look === lookIndex; // one step outside the comfort zone, picked by the taste model
+  const fit = plan?.trace.taste?.fit[lookIndex];
   const mood = ctx.oni?.mood ?? "calm";
 
   return (
@@ -188,10 +190,14 @@ export default function Today({ ctx }: { ctx: AppCtx }) {
             )}
 
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", paddingRight: 62 }}>
-              <span className="label" style={{ fontSize: 11 }}>
-                {lookIndex === 0 ? "TODAY'S PICK" : "ALSO GOOD"} · LOOK {LOOK_LETTERS[lookIndex]}
+              <span className="label" style={{ fontSize: 11, whiteSpace: "nowrap", color: stretch ? "var(--shu)" : undefined }}>
+                {stretch ? "STRETCH" : lookIndex === 0 ? "TODAY'S PICK" : "ALSO GOOD"} · LOOK {LOOK_LETTERS[lookIndex]}
               </span>
-              {plan && <span className="label" style={{ fontWeight: 400, fontSize: 11 }}>{lookIndex + 1} / {plan.looks.length}</span>}
+              {plan && (
+                <span className="label" style={{ fontWeight: 400, fontSize: 11 }}>
+                  {lookIndex + 1} / {plan.looks.length}
+                </span>
+              )}
             </div>
 
             {load.state !== "ready" || !look ? (
@@ -199,7 +205,14 @@ export default function Today({ ctx }: { ctx: AppCtx }) {
             ) : (
               <>
                 <Collage key={plan!.id + lookIndex} items={look.items} onOpen={ctx.openItem} onTryOn={() => ctx.openTryOn(plan!, lookIndex)} />
-                <h2 className="display" style={{ fontSize: 22, lineHeight: 1.05 }}>{look.name}</h2>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                  <h2 className="display" style={{ fontSize: 22, lineHeight: 1.05 }}>{look.name}</h2>
+                  {fit !== undefined && !!plan!.trace.taste?.n && (
+                    <span className="label" title="How well this suits the taste the oni has learned" style={{ whiteSpace: "nowrap", border: "var(--line)", borderRadius: 4, padding: "2px 6px", fontSize: 10 }}>
+                      SUITS YOU {fit}%
+                    </span>
+                  )}
+                </div>
                 <p style={{ margin: 0, fontSize: 14, lineHeight: 1.55 }}>{look.why}</p>
               </>
             )}

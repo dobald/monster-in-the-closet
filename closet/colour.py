@@ -51,7 +51,7 @@ def read(items: list[dict], cutout_dir: Path) -> dict:
     palette = []
     for it in items:
         t = it["tags"]
-        hex_ = measured(str(cutout_dir / f"{it['id']}.png"))
+        hex_ = it.get("hex") or measured(str(cutout_dir / f"{it['id']}.png"))  # "hex": a piece with no cutout (a thrift idea)
         h, l, s = _hls(hex_)
         name = t["primary_color"].lower()
         neutral = any(w in name for w in NEUTRAL_WORDS) or s < 0.15 or l < 0.12 or l > 0.92

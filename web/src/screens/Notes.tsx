@@ -5,6 +5,7 @@ import Oni, { MOOD_LABEL } from "../Oni";
 import { getTheme, setTheme, type Theme } from "../theme";
 import { AliveBar } from "./Today";
 import { BasicsChecklist } from "./Touches";
+import { StyleDnaCard } from "./Taste";
 import { DataNote } from "./Onboarding";
 
 // The oni's notebook: its mood, the closet-alive meter, try-on settings, and every preference
@@ -56,6 +57,8 @@ export default function Notes({ ctx }: { ctx: AppCtx }) {
           <span className="small">{MOOD_LABEL[mood].line}</span>
         </div>
       </section>
+
+      <StyleDnaCard ctx={ctx} />
 
       <section aria-label="Closet stats" style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 8 }}>
         <Stat label="ALIVE" value={oni?.has_history ? `${oni.closet_alive_pct}%` : "—"} />

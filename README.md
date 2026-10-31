@@ -162,6 +162,43 @@ It's asked once, only about a plan that was actually on screen that day, and nev
 
 **The oni's rescue line.** Above each look, the oni says how long its most forgotten piece has waited, for example "Your dark blue straight-leg jeans have been in here about 400 days. Today they get out." It says "about" when the date is an estimate, and it goes quiet once the look is worn.
 
+### A taste that grows (好み)
+
+The longer you use it, the better it knows your style, and it uses that to grow your style with clothes you already own. This lives in `closet/taste.py`: plain numpy that runs in milliseconds, with the models phrasing the results.
+
+**What it learns from.** Every outfit becomes a vector of 20 named features. Some come from the measured colour read: one pop of colour, tonal, crisp contrast, warm tones, head-to-toe dark. Others come from the tags: relaxed top, wide trousers, a layer on top, knitwear, denim, mixing casual and smart. A Bayesian logistic model learns one weight per feature:
+- **Choices:** wearing look B means B beat A and C that day. These come from the wears you've already logged, including the one-tap morning answer.
+- **Ratings:** the evening check-in's meh / fine / good / iconic for what you wore.
+- **This or that:** a few pairs of outfits from your own closet during setup, and again from Notes whenever you like. It asks about the pairs it is least sure of (largest posterior variance of the difference) and never repeats a pair.
+- **"No" to the morning question:** a weak vote against the pick that didn't get worn.
+- **Corrections:** "That's me" or "Not me" on Style DNA count as strong evidence.
+
+The posterior comes from a Laplace approximation, so the model knows how sure it is, and that uncertainty drives everything below.
+
+**How it changes the picks.**
+- **Muse Spark Open gets what's been learned.** The strongest traits go into its prompt as preferences, for example "Learned taste (8 signals): likes relaxed or oversized tops".
+- **The rule picker uses it too.** Look A rescues the most forgotten piece and pairs it with what suits you; look B is your best match today.
+- **Every look shows "SUITS YOU n%".** That's the chance you'd pick it over a typical outfit from your closet.
+
+**The Stretch look (look C).** One step outside your comfort zone, using only your own clothes:
+- **How it's picked:** Thompson sampling draws a plausible taste from the posterior, then takes the outfit it likes best among those with exactly one feature you have never worn, or two pieces never worn together. The comfort zone is what you've worn, plus today's looks A and B.
+- **How it explains itself:** for example "New for you: a print or stripe. From what I know it's a coin toss, which is exactly why it's worth one try."
+- **How it learns:** wearing it or skipping it teaches the model either way. The draw is seeded by the day and the closet, so a plan always replays the same.
+
+**Style DNA (Notes).** What it has learned, in plain words, each with its evidence and That's me / Not me. It also shows:
+- this week's change, from daily snapshots of the weights
+- **how well it knows you**: leave-one-out, it predicts which look you wore, against chance. On a synthetic user with 15 choices it got 11 of 15 right, against 33% for guessing.
+- **outfits explored**: how many of the outfits your closet can make you've actually worn, and how many stretches you took
+- a two-sentence portrait written by Muse Spark Open (with a rules fallback)
+
+**Thrift is taste-aware.** Each idea is scored on the outfits it would make with what you own ("SUITS YOU 67%"), and the order weighs outfits unlocked by how well they suit you. Before anything has been learned, no percentage is shown.
+
+| Endpoint | What it does |
+|---|---|
+| `GET /api/taste` | Style DNA: traits with evidence, this week, accuracy, outfits explored, the narrative |
+| `POST /api/taste/correct` | `{feature, value: 1 \| -1}`: "that's me" or "not me" |
+| `GET` / `POST /api/taste/quiz` | This-or-that pairs from your closet, then `{answers: [{picked, other}]}` |
+
 | Endpoint | What it does |
 |---|---|
 | `POST /api/wardrobe/last-worn` | `{items: [{id, days_ago}]}`: estimated last-worn dates; `days_ago: null` clears an estimate |
@@ -316,7 +353,7 @@ In the Claude desktop app, the `api-live` and `web-lan` launch configs do the sa
 
 ## Getting started
 
-The first time the app opens, it walks through six short steps and saves as it goes, so leaving halfway loses nothing:
+The first time the app opens, it walks through seven short steps and saves as it goes, so leaving halfway loses nothing:
 
 1. **Hello:** the oni introduces itself, with three promises: only what you own, dressed for your day, and second-hand first.
 2. **Where are you?** City search using Open-Meteo geocoding (free, no key), or "Use my location" where the browser allows it. There's an optional "I run cold / warm" choice, which seeds a preference the planner reads from day one.
@@ -325,7 +362,8 @@ The first time the app opens, it walks through six short steps and saves as it g
    - A short note says where the photos go.
    - **No clothes handy? Try a sample closet** loads 9 made-up pieces instead, some unworn for months, so there is something to rescue straight away.
 5. **When did you last wear these?** A rough answer per piece, so forgotten clothes are visible from day one.
-6. **Your first pick:** a real plan for today, with your weather and calendar. "See my day" finishes setup.
+6. **This or that:** a few pairs of outfits from your own closet. Tap the one you'd rather wear, and the taste model starts learning before the first plan. You can skip it.
+7. **Your first pick:** a real plan for today, with your weather and calendar. "See my day" finishes setup.
 
 Who wears the try-on is asked the first time you tap **Try it on**, not during setup.
 

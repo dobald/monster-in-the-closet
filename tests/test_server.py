@@ -347,8 +347,10 @@ def test_getting_started(var_dir: Path, run_dir: Path) -> None:
         assert c.get("/api/profile").json()["onboarded_at"]
 
         # Fixture-mode plans carry a rule-picker trace too.
-        kinds = [s["kind"] for s in c.post("/api/plan", json={}).json()["trace"]["steps"]]
-        assert kinds == ["context", "tool", "tool", "rules", "check", "done"], kinds
+        steps = c.post("/api/plan", json={}).json()["trace"]["steps"]
+        kinds = [s["kind"] for s in steps]
+        assert kinds[:5] == ["context", "tool", "tool", "rules", "check"] and kinds[-1] == "done", kinds
+        assert any(s["label"] == "taste_model()" for s in steps), "the taste model shows in the trace"
 
         # Wear-history backfill: estimates make forgotten clothes visible from day one.
         items = {i["tags"]["category"]: i for i in c.get("/api/wardrobe").json()}
@@ -683,6 +685,66 @@ def test_same_photo_pairs(var_dir: Path) -> None:
     assert len(cdedupe.candidate_pairs([same[0], {**same[1], "source": "q.jpg"}], var_dir)) == 1
 
 
+def test_taste(var_dir: Path) -> None:
+    """The taste model: a stretch look from day one, a warm-up that teaches it, corrections, evaluation, thrift fit."""
+    from datetime import timedelta
+    from server.planning import today_local
+
+    with client_for("fixture", var_dir) as c:
+        c.post("/api/closet/sample")
+        dna = c.get("/api/taste").json()
+        assert dna["signals"] == 0 and dna["traits"] == [] and "getting to know you" in dna["narrative"], dna
+
+        plan = c.post("/api/plan").json()
+        st = plan["trace"]["stretch"]
+        assert plan["looks"][st["look"]]["name"] == "Stretch" and 0 <= st["pct"] <= 100, st
+        assert len(plan["trace"]["taste"]["fit"]) == len(plan["looks"])
+        assert {frozenset(lk["item_ids"]) for lk in plan["looks"]}.__len__() == len(plan["looks"]), "the stretch is a new outfit"
+        again = c.post("/api/plan").json()
+        assert again["looks"][st["look"]]["item_ids"] == plan["looks"][st["look"]]["item_ids"], "same day, same closet: same stretch"
+
+        # The warm-up: always pick the outfit with knitwear in it.
+        knit = lambda outfit: any(w in i["tags"]["subtype"] for i in outfit for w in ("sweater", "cardigan"))  # noqa: E731
+        answered, seen = 0, set()
+        for _ in range(3):
+            pairs = c.get("/api/taste/quiz").json()["pairs"]
+            assert pairs, "the quiz has pairs to ask"
+            keys = {frozenset((frozenset(i["id"] for i in pr["a"]), frozenset(i["id"] for i in pr["b"]))) for pr in pairs}
+            assert not keys & seen, "a pair already answered is never asked again"
+            seen |= keys
+            answers = []
+            for pr in pairs:
+                a, b = (pr["a"], pr["b"]) if knit(pr["a"]) or not knit(pr["b"]) else (pr["b"], pr["a"])
+                answers.append({"picked": [i["id"] for i in a], "other": [i["id"] for i in b]})
+            answered += c.post("/api/taste/quiz", json={"answers": answers}).json()["saved"]
+        dna = c.get("/api/taste").json()
+        assert dna["signals"] == answered and dna["counts"]["quiz"] == answered, dna
+        knitwear = next(t for t in dna["traits"] if t["feature"] == "knit")
+        assert knitwear["weight"] > 0 and "knitwear" in knitwear["sentence"], dna["traits"]
+        taught = c.post("/api/plan").json()
+        assert knit(taught["looks"][1]["items"]), "look B is the best match for what the warm-up taught, even from the rule picker"
+        assert max(taught["trace"]["taste"]["fit"][:2]) >= 60, taught["trace"]["taste"]
+
+        # "Not me" on the card moves the weight the other way.
+        assert c.post("/api/taste/correct", json={"feature": "nope", "value": -1}).status_code == 404
+        c.post("/api/taste/correct", json={"feature": "knit", "value": -1})
+        after = next((t["weight"] for t in c.get("/api/taste").json()["traits"] if t["feature"] == "knit"), 0)
+        assert after < knitwear["weight"], (after, knitwear)
+
+        # Three worn choices on three days: the model is scored on predicting them, leave-one-out.
+        for back in (3, 2, 1):
+            day = (today_local() - timedelta(days=back)).isoformat()
+            pl = c.post("/api/plan", json={"day": day}).json()
+            c.post(f"/api/plans/{pl['id']}/wear", json={"look": 0, "day": day})
+        dna = c.get("/api/taste").json()
+        acc = dna["accuracy"]
+        assert acc and acc["n"] == 3 and 0 <= acc["accuracy"] <= 1 and acc["chance"] > 0, acc
+        assert dna["coverage"]["possible"] == 15 and dna["coverage"]["worn"] >= 1, dna["coverage"]
+
+        gaps = c.post("/api/gaps").json()
+        assert all(0 <= p["taste_fit"] <= 100 for p in gaps["pieces"]), gaps["pieces"]
+
+
 def main_() -> None:
     tmp = Path(tempfile.mkdtemp(prefix="monster-test-"))
     run_dir = config.ROOT / "out" / f"_test_seed_{tmp.name}"
@@ -710,8 +772,9 @@ def main_() -> None:
         test_sample_closet_and_prebuild(tmp / "sample")
         test_yesterday_question(tmp / "yesterday")
         test_same_photo_pairs(tmp / "pairs")
+        test_taste(tmp / "taste")
         print("OK: fixture mode, seeding, tag fixes, caching, dedupe, planning, wear, check-ins, the agent loop, gap finder, try-on, layered try-on, getting started, finishing touches, colour reads, "
-              "cross-photo duplicates, per-device closets, the sample closet, plans made ahead and the morning wear question all behave.")
+              "cross-photo duplicates, per-device closets, the sample closet, plans made ahead, the morning wear question and the taste model all behave.")
     finally:
         shutil.rmtree(run_dir, ignore_errors=True)
         shutil.rmtree(tmp, ignore_errors=True)

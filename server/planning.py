@@ -9,12 +9,15 @@ back to Muse Spark 1.3, then to rules. Fixture mode never calls a model.
 from __future__ import annotations
 
 import asyncio
+import itertools
 import json
 import uuid
 from datetime import date, datetime, timedelta, timezone
 
-from closet import colour, config, gaps, planner, styling, tools
-from closet.schema import CheckinLearning, OutfitPlan
+import numpy as np
+
+from closet import colour, config, gaps, planner, styling, taste, tools
+from closet.schema import CheckinLearning, Look, OutfitPlan
 
 from .cache import Cache, sha256
 from .settings import Settings
@@ -130,7 +133,8 @@ class Planning:
         gap = planner.outfit_gap(items)
         if gap:
             raise ValueError(gap)
-        prefs = self.store.list_preferences()
+        model = self.taste_model()
+        prefs = self.store.list_preferences() + taste.prompt_lines(model)  # what it has learned rides along as preferences
         weather = self.weather(day, lat, lon)
         calendar = self.calendar(day)
 
@@ -143,21 +147,22 @@ class Planning:
         if cached:
             plan, trace, source = OutfitPlan.model_validate(cached["plan"]), {**cached["trace"], "cached": True}, "cache"
         elif self.settings.live:
-            plan, trace, source = await self._live_plan(items, prefs, day, notes, weather, calendar)
+            plan, trace, source = await self._live_plan(items, prefs, day, notes, weather, calendar, self._taste_score(model))
             self.cache.put("plans", key, {"plan": plan.model_dump(), "trace": trace})
         else:
-            plan = planner.plan_with_rules(items, weather, calendar, notes, day)
+            plan = planner.plan_with_rules(items, weather, calendar, notes, day, self._taste_score(model))
             trace, source = {"provider": "rules", "reason": "fixture mode",
                              "steps": planner.rule_steps(items, prefs, weather, calendar, notes, plan, "Fixture mode: no model calls")}, "rules"
 
         plan = planner.distinct_looks(plan)
+        plan, trace = self._with_taste(plan, dict(trace), items, day, weather, model)
         trace = {**trace, "basis": self.basis(day), **({"prebuilt": True} if prebuilt else {})}
         record = {"id": uuid.uuid4().hex[:12], "day": day.isoformat(), "created_at": now(), "source": source,
                   "plan": plan.model_dump(), "trace": trace, "weather": weather, "calendar": calendar, "notes": notes}
         self.store.add_plan(record)
         return record
 
-    async def _live_plan(self, items, prefs, day, notes, weather, calendar) -> tuple[OutfitPlan, dict, str]:
+    async def _live_plan(self, items, prefs, day, notes, weather, calendar, taste_score=None) -> tuple[OutfitPlan, dict, str]:
         tool_impls = {"get_weather": lambda: weather, "get_calendar": lambda: calendar}
         failures = []
         providers = [config.PLAN_PROVIDER] + [p for p in ("meta",) if p != config.PLAN_PROVIDER]
@@ -168,7 +173,7 @@ class Planning:
                 return plan, {**trace, "failures": failures}, "agent"
             except Exception as e:
                 failures.append(f"{provider}: {type(e).__name__}: {e}"[:300])
-        plan = planner.plan_with_rules(items, weather, calendar, notes, day)
+        plan = planner.plan_with_rules(items, weather, calendar, notes, day, taste_score)
         steps = planner.rule_steps(items, prefs, weather, calendar, notes, plan, "The models didn't answer, so the rules stepped in")
         return plan, {"provider": "rules", "failures": failures, "steps": steps}, "rules"
 
@@ -195,6 +200,8 @@ class Planning:
         if not record:
             raise KeyError("Nothing to ask about yesterday.")
         worn = None if look is None else self.wear(record["id"], look, date.fromisoformat(record["day"]))
+        if look is None and record["plan"]["looks"]:
+            self.store.add_taste_event("not_worn", a=record["plan"]["looks"][0]["item_ids"])
         self.store.put_setting("asked_worn", {"day": record["day"]})  # after the wear, so a bad look index can be retried
         return worn
 
@@ -304,7 +311,8 @@ class Planning:
         gap = planner.outfit_gap(items)
         if gap:
             raise ValueError(gap)
-        prefs = self.store.list_preferences()
+        model = self.taste_model()
+        prefs = self.store.list_preferences() + taste.prompt_lines(model)
         thrift = self.store.list_thrift()
         watching = [t["name"] for t in thrift if t["status"] == "watching"]
         dismissed = [t["name"] for t in thrift if t["status"] == "dismissed"]
@@ -318,7 +326,7 @@ class Planning:
                                  gaps.season_for(day), config.PLAN_PROVIDER], sort_keys=True, default=str).encode())
         cached = None if fresh else self.cache.get("gaps", key)
         if cached:
-            return {**cached, "trace": {**cached["trace"], "cached": True}}
+            return {**cached, "pieces": self.thrift_taste(cached["pieces"], items, model), "trace": {**cached["trace"], "cached": True}}
 
         pieces, trace, source = [], {"failures": []}, "rules"
         if self.settings.live:
@@ -340,8 +348,225 @@ class Planning:
         record = {"created_at": now(), "source": source, "summary": summary, "pieces": pieces, "trace": trace}
         if source == "agent":
             self.cache.put("gaps", key, record)
-        return record
+        return {**record, "pieces": self.thrift_taste(pieces, items, model)}
 
+
+    # -- taste (closet/taste.py): learned from choices, ratings, the warm-up and corrections
+
+    def _vec(self, outfit: list[dict]) -> np.ndarray:
+        return taste.vector(outfit, colour.read(outfit, self.settings.cutout_dir))
+
+    def taste_data(self) -> tuple[list[taste.Row], list[tuple]]:
+        """Training rows from everything the user has done, plus the worn choices for evaluation."""
+        by_id = {i["id"]: i for i in self._garments()}
+
+        def vec(ids: list[str]) -> np.ndarray | None:
+            outfit = [by_id[i] for i in ids if i in by_id]
+            return self._vec(outfit) if outfit else None
+
+        rows, choices = [], []
+        for g, w in enumerate(self.store.worn_looks()):
+            plan = self.store.get_plan(plan_id=w["plan_id"])
+            looks = [vec(lk["item_ids"]) for lk in plan["plan"]["looks"]] if plan else []
+            if len(looks) < 2 or w["look"] >= len(looks) or any(x is None for x in looks):
+                continue
+            rows += taste.choice_rows(looks[w["look"]], [x for n, x in enumerate(looks) if n != w["look"]], "choice", g)
+            choices.append((g, looks, w["look"]))
+        worn = self.store.outfits_worn()
+        for c in self.store.list_checkins():
+            y, ids = taste.RATING.get(c["answers"].get("feeling")), worn.get(c["day"])
+            if y is not None and ids and (x := vec(ids)) is not None:
+                rows.append(taste.Row(x, y, 0.7, True, "rating"))
+        for e in self.store.list_taste_events():
+            if e["kind"] == "quiz" and (a := vec(e["a"])) is not None and (b := vec(e["b"])) is not None:
+                rows += taste.choice_rows(a, [b], "quiz", -1)
+            elif e["kind"] == "not_worn" and (x := vec(e["a"])) is not None:
+                rows.append(taste.Row(x, 0.2, 0.3, True, "not_worn"))
+            elif e["kind"] == "correct" and e["feature"] in taste.INDEX:
+                rows.append(taste.correction_row(e["feature"], e["value"]))
+        return rows, choices
+
+    def taste_model(self) -> taste.Model:
+        return taste.fit(self.taste_data()[0])
+
+    def _taste_score(self, model: taste.Model):
+        """The learned taste as an outfit scorer for the rule picker, once there is something learned."""
+        return (lambda outfit: model.utility(self._vec(outfit))) if model.n else None
+
+    def _candidates(self, items: list[dict], cold: bool) -> list[tuple[list[dict], np.ndarray]]:
+        return [(o, self._vec(o)) for o in taste.outfits(items, cold)]
+
+    def _with_taste(self, plan: OutfitPlan, trace: dict, items: list[dict], day: date, weather: dict,
+                    model: taste.Model) -> tuple[OutfitPlan, dict]:
+        """Score each look against the learned taste, and make look C a Stretch: one step outside the
+        comfort zone, picked by Thompson sampling. Seeded by the day and closet, so a plan replays the same."""
+        parts = (weather.get("parts") or {}).values()
+        cold = min((p["feels_like_low_c"] for p in parts), default=15) <= COLD_C
+        by_id = {i["id"]: i for i in items}
+        cands = self._candidates(items, cold)
+        base = float(np.mean([model.utility(x) for _, x in cands])) if cands else 0.0
+
+        # The comfort zone: outfits actually worn, plus today's own picks A and B.
+        worn = [[by_id[i] for i in ids if i in by_id] for ids in self.store.outfits_worn().values()]
+        comfort = [w for w in worn if w] + [[by_id[i] for i in lk.item_ids if i in by_id] for lk in plan.looks[:2]]
+        exposure = sum(((self._vec(o) > 0).astype(float) for o in comfort if o), np.zeros(taste.F))
+        pairs_worn = {frozenset(p) for o in worn for p in itertools.combinations({i["id"] for i in o}, 2)}
+        taken = [{i for i in lk.item_ids if by_id.get(i, {}).get("tags", {}).get("category") != "outerwear"} for lk in plan.looks[:2]]
+        rng = np.random.default_rng(int(sha256(f"stretch:{day}:{self.basis(day)}".encode())[:12], 16))
+        stretch = taste.pick_stretch(model, cands, exposure, pairs_worn, taken, rng) if cands else None
+
+        steps = list(trace.get("steps") or [])
+        done = steps.pop() if steps and steps[-1].get("kind") == "done" else None
+        if stretch:
+            outfit, x = stretch["outfit"], stretch["x"]
+            pct = taste.fit_pct(model, x, base)
+            if stretch["feature"]:
+                new = f"New for you: {taste.STRETCH_TEXT[stretch['feature']]}."
+            else:
+                a, b = (by_id[i]["tags"]["subtype"] for i in stretch["pair"])
+                new = f"You've never worn your {a} with your {b}."
+            idle = max(outfit, key=lambda i: self._idle_days(i, day) or 0)
+            look = Look(name="Stretch", item_ids=[i["id"] for i in outfit],
+                        why=f"{new} {self._stretch_hunch(pct)} Try it once and I'll learn either way.",
+                        rediscovered_id=idle["id"] if (self._idle_days(idle, day) or 0) >= RESCUE_DAYS else None)
+            index = min(2, len(plan.looks))
+            plan.looks = plan.looks[:index] + [look]
+            trace["stretch"] = {"look": index, "feature": stretch["feature"], "pair": stretch["pair"], "pct": pct,
+                                "label": taste.STRETCH_TEXT[stretch["feature"]] if stretch["feature"] else "a new pairing"}
+            steps.append({"kind": "tool", "label": "stretch()", "ok": True,
+                          "detail": f"Thompson-sampled from {len(cands)} outfits you could wear: {new[:-1]} ({pct}% fit)"})
+        fits = [taste.fit_pct(model, self._vec([by_id[i] for i in lk.item_ids if i in by_id]), base) for lk in plan.looks]
+        trace["taste"] = {"n": model.n, "fit": fits}
+        steps.append({"kind": "tool", "label": "taste_model()", "ok": True,
+                      "detail": (f"Learned from {model.n} signals · fit " + " · ".join(f"{f}%" for f in fits)) if model.n
+                      else "No signals yet: the warm-up and your first wears teach it"})
+        if done:
+            steps.append(done)
+        trace["steps"] = steps
+        return plan, trace
+
+    @staticmethod
+    def _stretch_hunch(pct: int) -> str:
+        if pct >= 60:
+            return "From what you wear, I think it suits you."
+        if pct >= 40:
+            return "From what I know it's a coin toss, which is exactly why it's worth one try."
+        return "It's a real stretch for you, but small steps are how a style grows."
+
+    async def style_dna(self, day: date) -> dict:
+        """What the oni has learned about your style, with evidence, this week's change, and how well it predicts you."""
+        rows, choices = self.taste_data()
+        model = taste.fit(rows)
+        found = taste.traits(model, 4)
+        now_w = {fid: round(float(model.w[i]), 3) for i, fid in enumerate(taste.IDS)}
+        snaps = self.store.get_setting("taste_snapshots") or {}
+        week_ago = (day - timedelta(days=7)).isoformat()
+        older = sorted(d for d in snaps if d <= week_ago) or sorted(d for d in snaps if d < day.isoformat())
+        week = taste.week_diff(now_w, snaps[older[-1]]) if older else []
+        snaps[day.isoformat()] = now_w
+        self.store.put_setting("taste_snapshots", dict(sorted(snaps.items())[-60:]))
+
+        items = self._garments()
+        main = {i["id"] for i in items if i["tags"]["category"] in ("top", "bottom", "dress")}
+        possible = {frozenset(i["id"] for i in o if i["id"] in main) for o in taste.outfits(items, cold=False)}
+        worn = {frozenset(i for i in ids if i in main) for ids in self.store.outfits_worn().values()} & possible
+        tried = 0
+        for w in self.store.worn_looks():
+            plan = self.store.get_plan(plan_id=w["plan_id"])
+            st = plan["trace"].get("stretch") if plan else None
+            tried += int(bool(st) and st["look"] == w["look"])
+
+        key = sha256(json.dumps([[t["feature"], round(t["weight"], 1)] for t in found] + week).encode())
+        narrative = self.cache.get("dna", key)
+        if narrative is None and self.settings.live and found:
+            try:
+                text = await asyncio.to_thread(taste.narrate_with_agent, found, week, model.n, config.PLAN_PROVIDER)
+                if text:
+                    narrative = {"text": text, "source": "agent"}
+                    self.cache.put("dna", key, narrative)
+            except Exception:
+                narrative = None
+        narrative = narrative or {"text": taste.narrate_with_rules(found, week, model.n), "source": "rules"}
+        return {
+            "signals": model.n, "counts": model.counts, "traits": found, "week": week, "narrative": narrative["text"],
+            "narrative_source": narrative["source"], "accuracy": taste.evaluate(rows, choices),
+            "learning": [taste.LABEL[fid] for i, fid in enumerate(taste.IDS) if model.evidence[i] == 0][:4],
+            "coverage": {"worn": len(worn), "possible": len(possible),
+                         "pct": round(100 * len(worn) / len(possible)) if possible else 0},
+            "stretches_worn": tried,
+        }
+
+    def correct_taste(self, feature: str, value: float) -> None:
+        if feature not in taste.INDEX:
+            raise KeyError("No such taste feature.")
+        self.store.add_taste_event("correct", feature=feature, value=1.0 if value > 0 else -1.0)
+
+    def quiz(self, k: int = 6) -> list[dict]:
+        """This-or-that pairs from the user's own closet: the ones the model is least sure about."""
+        items = self._garments()
+        if planner.outfit_gap(items):
+            return []
+        asked = {taste.pair_key(e["a"], e["b"]) for e in self.store.list_taste_events() if e["kind"] == "quiz"}
+        cands = [(o, self._vec(o)) for o in taste.outfits(items, cold=False, every_layer=True)]
+        pairs = taste.quiz_pairs(self.taste_model(), cands, k, asked)
+        extras = [i for i in self.store.list_items() if i["tags"] and i["tags"]["category"] in ("shoes", "accessory")]
+        return [{"a": [i["id"] for i in a], "b": [i["id"] for i in b],
+                 "a_extras": self._matching_extras(a, extras), "b_extras": self._matching_extras(b, extras)} for a, b in pairs]
+
+    def _matching_extras(self, outfit: list[dict], extras: list[dict]) -> list[str]:
+        """Up to one pair of shoes and one accessory you own, closest in colour to the outfit: the right-hand
+        column of a Pinterest-style collage. Shown, not judged: the quiz answer is about the outfit."""
+        def rgb(item: dict) -> tuple[int, ...]:
+            h = colour.measured(str(self.settings.cutout_dir / f"{item['id']}.png"))
+            return tuple(int(h[k:k + 2], 16) for k in (1, 3, 5))
+
+        pal = [rgb(i) for i in outfit]
+        dist = lambda e: min(sum((x - y) ** 2 for x, y in zip(rgb(e), c)) for c in pal)  # noqa: E731
+        out = []
+        for cat in ("shoes", "accessory"):
+            mine = sorted((e for e in extras if e["tags"]["category"] == cat), key=dist)
+            out += [e["id"] for e in mine[:1]]
+        return out
+
+    def answer_quiz(self, answers: list[dict]) -> int:
+        known = {i["id"] for i in self._garments()}
+        n = 0
+        for ans in answers[:20]:
+            a, b = [i for i in ans["picked"] if i in known], [i for i in ans["other"] if i in known]
+            if a and b and set(a) != set(b):
+                self.store.add_taste_event("quiz", a=a, b=b)
+                n += 1
+        return n
+
+    def thrift_taste(self, pieces: list[dict], items: list[dict], model: taste.Model) -> list[dict]:
+        """How well each thrift idea suits the learned taste, from the outfits it would make with what you own.
+        A piece that unlocks outfits *and* suits you comes first."""
+        if not model.n:
+            return pieces  # nothing learned yet: no made-up percentages
+        by_id = {i["id"]: i for i in items}
+        cands = self._candidates(items, cold=False)
+        base = float(np.mean([model.utility(x) for _, x in cands])) if cands else 0.0
+        out = []
+        for p in pieces:
+            colour_name = (p.get("colors") or ["grey"])[0]
+            ghost = {"id": f"thrift-{p['name']}", "hex": taste.name_hex(colour_name), "tags": {
+                "category": p["category"], "subtype": p["name"].lower(), "primary_color": colour_name, "pattern": "solid",
+                "formality": "casual", "fit": "regular", "warmth": 3}}
+            mates = [by_id[i] for i in p["pairs_with"] if i in by_id]
+            tops = [m for m in mates if m["tags"]["category"] == "top"]
+            bottoms = [m for m in mates if m["tags"]["category"] == "bottom"]
+            if p["category"] == "top":
+                outfits = [[ghost, b] for b in bottoms]
+            elif p["category"] == "bottom":
+                outfits = [[t, ghost] for t in tops]
+            elif p["category"] == "outerwear":
+                outfits = [[t, b, ghost] for t, b in itertools.product(tops, bottoms)]
+            else:
+                outfits = [[ghost]]
+            outfits = outfits[:6]
+            fit = round(float(np.mean([taste.fit_pct(model, self._vec(o), base) for o in outfits]))) if outfits else 50
+            out.append({**p, "taste_fit": fit})
+        return sorted(out, key=lambda p: -p["outfits_unlocked"] * (0.6 + 0.8 * p["taste_fit"] / 100))
 
     # -- finishing touches (closet/styling.py)
 

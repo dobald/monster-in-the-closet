@@ -312,7 +312,7 @@ def _plan_out(record: dict) -> dict:
     store = C().store
     out = {k: record[k] for k in ("id", "day", "created_at", "source", "notes", "weather", "calendar")}
     out["trace"] = {k: v for k, v in record["trace"].items() if k in
-                    ("provider", "model", "tool_calls", "repairs", "seconds", "tokens_in", "tokens_out", "cached", "failures", "steps", "prebuilt")}
+                    ("provider", "model", "tool_calls", "repairs", "seconds", "tokens_in", "tokens_out", "cached", "failures", "steps", "prebuilt", "taste", "stretch")}
     plan = record["plan"]
     out["weather_summary"], out["plans_summary"] = plan["weather_summary"], plan["plans_summary"]
     out["looks"] = []
@@ -749,6 +749,49 @@ def add_preference(body: PreferenceIn) -> dict:
 class StyleIn(BaseModel):
     basics: list[str] | None = None  # keys from GET /api/style catalog
     skip: list[str] | None = None  # playbook ids the user said aren't their style
+
+
+class CorrectIn(BaseModel):
+    feature: str
+    value: float  # +1 "that's me", -1 "not me"
+
+
+class QuizAnswer(BaseModel):
+    picked: list[str]
+    other: list[str]
+
+
+class QuizIn(BaseModel):
+    answers: list[QuizAnswer]
+
+
+@app.get("/api/taste")
+async def style_dna() -> dict:
+    """Style DNA: what the taste model has learned, its evidence, this week's change and how well it predicts you."""
+    return await C().planning.style_dna(today_local())
+
+
+@app.post("/api/taste/correct", status_code=204)
+def correct_taste(body: CorrectIn) -> None:
+    try:
+        C().planning.correct_taste(body.feature, body.value)
+    except KeyError as e:
+        raise HTTPException(404, str(e))
+
+
+@app.get("/api/taste/quiz")
+def taste_quiz() -> dict:
+    """This or that: pairs of outfits from your own closet, the ones the model is least sure about."""
+    store = C().store
+    pairs = C().planning.quiz()
+    out = lambda ids: [_item_out(store.get_item(i)) for i in ids]  # noqa: E731
+    return {"pairs": [{"a": out(p["a"]), "b": out(p["b"]), "a_extras": out(p["a_extras"]), "b_extras": out(p["b_extras"])}
+                      for p in pairs]}
+
+
+@app.post("/api/taste/quiz")
+def answer_taste_quiz(body: QuizIn) -> dict:
+    return {"saved": C().planning.answer_quiz([a.model_dump() for a in body.answers])}
 
 
 @app.get("/api/style")

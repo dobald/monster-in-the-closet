@@ -3,19 +3,21 @@ import { api, ApiError, itemName, type Item, type Place, type Plan, type Profile
 import type { AppCtx } from "../App";
 import Oni from "../Oni";
 import { LastWornList } from "./LastWorn";
+import { Quiz } from "./Taste";
 
 // Getting started: meet the oni, then give it the things it needs to dress you (where you are,
 // what's on today, what you own and roughly when you last wore it), and end on a real first pick.
 // Who wears the try-on is asked the first time someone taps "Try it on", not here. Every step saves as you go, so leaving halfway loses nothing; "editing" reopens it from
 // the location step (Notes → Your setup).
 
-type Step = "hello" | "place" | "day" | "closet" | "history" | "first";
+type Step = "hello" | "place" | "day" | "closet" | "history" | "taste" | "first";
 const STEPS: { id: Step; en: string; ja: string }[] = [
   { id: "hello", en: "HELLO", ja: "はじめまして" },
   { id: "place", en: "WEATHER", ja: "天気" },
   { id: "day", en: "YOUR DAY", ja: "予定" },
   { id: "closet", en: "CLOSET", ja: "服" },
   { id: "history", en: "LAST WORN", ja: "思い出" },
+  { id: "taste", en: "YOUR TASTE", ja: "好み" },
   { id: "first", en: "FIRST PICK", ja: "最初のコーデ" },
 ];
 
@@ -82,6 +84,7 @@ export default function Onboarding({ ctx, editing, onDone }: { ctx: AppCtx; edit
           {step === "day" && <DayStep profile={profile} ctx={ctx} onNext={next} />}
           {step === "closet" && <ClosetStep profile={profile} ctx={ctx} onChange={refresh} onNext={next} />}
           {step === "history" && <HistoryStep ctx={ctx} onNext={next} />}
+          {step === "taste" && <TasteStep ctx={ctx} onNext={next} />}
           {step === "first" && <FirstPick profile={profile} ctx={ctx} editing={editing} onScan={() => setStep("closet")} onDone={onDone} />}
         </div>
       )}
@@ -571,7 +574,26 @@ function HistoryStep({ ctx, onNext }: { ctx: AppCtx; onNext: () => void }) {
   );
 }
 
-// ------------------------------------------------------------------ 6. first pick
+// ------------------------------------------------------------------ 6. this or that
+
+// Thirty seconds of "which would you rather wear?" with outfits from your own closet: the taste model
+// starts learning before the first plan, and asks about the pairs it's least sure of.
+function TasteStep({ ctx, onNext }: { ctx: AppCtx; onNext: () => void }) {
+  return (
+    <>
+      <Title en="THIS OR THAT" ja="好み" sub="A few quick picks from your own closet. I learn your taste from them, and keep learning from what you wear." />
+      <Quiz
+        ctx={ctx}
+        onDone={(saved) => {
+          if (saved) ctx.toast(`Learned from ${saved} pick${saved === 1 ? "" : "s"}. Let's see what I'd put you in.`);
+          onNext();
+        }}
+      />
+    </>
+  );
+}
+
+// ------------------------------------------------------------------ 7. first pick
 
 function FirstPick({ profile, ctx, editing, onScan, onDone }: { profile: Profile; ctx: AppCtx; editing: boolean; onScan: () => void; onDone: () => void }) {
   const [plan, setPlan] = useState<Plan | null>(null);

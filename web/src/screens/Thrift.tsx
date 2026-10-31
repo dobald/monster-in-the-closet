@@ -285,6 +285,7 @@ function GapCard({ piece: p, index, onList, onWatch, onDismiss, example, ctx }: 
             WHAT TO LOOK FOR · <span lang="ja">目利き</span>
           </span>
           {p.price_range && <span className="tag-ai">~{p.price_range} USED</span>}
+          {p.taste_fit !== undefined && <span className="tag-ai">SUITS YOU {p.taste_fit}%</span>}
         </span>
         <span style={{ fontSize: 13, lineHeight: 1.5 }}>{p.look_for}</span>
         <span style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>

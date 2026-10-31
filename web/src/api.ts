@@ -77,6 +77,8 @@ export interface Plan {
     repairs?: number;
     failures?: string[];
     steps?: TraceStep[];
+    taste?: { n: number; fit: number[] }; // how well each look suits the learned taste, %
+    stretch?: { look: number; feature: string | null; label: string; pct: number }; // the look one step outside your comfort zone
   };
   weather_summary: string;
   plans_summary: string;
@@ -211,6 +213,36 @@ export interface GapPiece {
   outfits_unlocked: number;
   pairs: Item[];
   example_url?: string | null; // AI example photo, once made
+  taste_fit?: number; // how well the outfits it would make suit the learned taste, %
+}
+
+export interface TasteTrait {
+  feature: string;
+  label: string;
+  weight: number;
+  evidence: number;
+  sure: boolean;
+  sentence: string;
+}
+
+export interface StyleDna {
+  signals: number;
+  counts: Record<string, number>;
+  traits: TasteTrait[];
+  week: string[];
+  narrative: string;
+  narrative_source: "agent" | "rules";
+  accuracy: { hits: number; n: number; accuracy: number; chance: number } | null;
+  learning: string[];
+  coverage: { worn: number; possible: number; pct: number };
+  stretches_worn: number;
+}
+
+export interface QuizPair {
+  a: Item[];
+  b: Item[];
+  a_extras: Item[]; // shoes / an accessory you own that go with it, for the collage only
+  b_extras: Item[];
 }
 
 export interface Gaps {
@@ -414,6 +446,10 @@ export const api = {
     call<{ new: boolean }>("/api/preferences", json("POST", { text, applies_when: applies_when ?? null })),
   preferences: () => call<Preference[]>("/api/preferences"),
   forget: (id: number) => call<void>(`/api/preferences/${id}`, { method: "DELETE" }),
+  taste: () => call<StyleDna>("/api/taste"),
+  correctTaste: (feature: string, value: 1 | -1) => call<void>("/api/taste/correct", json("POST", { feature, value })),
+  quiz: () => call<{ pairs: QuizPair[] }>("/api/taste/quiz"),
+  answerQuiz: (answers: { picked: string[]; other: string[] }[]) => call<{ saved: number }>("/api/taste/quiz", json("POST", { answers })),
   closet: () => call<{ per_device: boolean; id: string }>("/api/closet"),
   openCloset: (id: string) => call<{ id: string }>("/api/closet/open", json("POST", { id })),
   newCloset: () => call<{ id: string }>("/api/closet/new", { method: "POST" }),

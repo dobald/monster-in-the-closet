@@ -83,6 +83,15 @@ CREATE TABLE IF NOT EXISTS thrift (
     status      TEXT NOT NULL,           -- watching | found | dismissed
     piece       TEXT NOT NULL            -- GapPiece JSON + outfits_unlocked
 );
+CREATE TABLE IF NOT EXISTS taste_events (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at  TEXT NOT NULL,
+    kind        TEXT NOT NULL,           -- quiz | not_worn | correct (wears and check-ins are read from their own tables)
+    a           TEXT,                    -- JSON item ids: the chosen outfit (quiz), the one not worn
+    b           TEXT,                    -- JSON item ids: the outfit it beat (quiz)
+    feature     TEXT,                    -- correct: the taste feature the user corrected
+    value       REAL                     -- correct: +1 "that's me", -1 "not me"
+);
 CREATE TABLE IF NOT EXISTS preferences (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     created_at   TEXT NOT NULL,
@@ -272,6 +281,38 @@ class Store:
     def wear_days(self) -> list[str]:
         with self._lock:
             return [r[0] for r in self._db.execute("SELECT DISTINCT day FROM wears ORDER BY day DESC").fetchall()]
+
+    def worn_looks(self) -> list[dict]:
+        """Every planned look that was worn: {day, plan_id, look}. Each is a choice over the plan's other looks."""
+        with self._lock:
+            rows = self._db.execute("SELECT DISTINCT day, plan_id, look FROM wears WHERE plan_id IS NOT NULL AND look IS NOT NULL "
+                                    "ORDER BY day").fetchall()
+        return [dict(r) for r in rows]
+
+    def outfits_worn(self) -> dict[str, list[str]]:
+        """Item ids worn together, per day."""
+        out: dict[str, list[str]] = {}
+        with self._lock:
+            for day, item in self._db.execute("SELECT day, item_id FROM wears ORDER BY day").fetchall():
+                out.setdefault(day, []).append(item)
+        return out
+
+    def list_checkins(self) -> list[dict]:
+        with self._lock:
+            rows = self._db.execute("SELECT day, plan_id, answers FROM checkins ORDER BY created_at").fetchall()
+        return [{"day": r["day"], "plan_id": r["plan_id"], "answers": json.loads(r["answers"])} for r in rows]
+
+    def add_taste_event(self, kind: str, a: list[str] | None = None, b: list[str] | None = None,
+                        feature: str | None = None, value: float | None = None) -> None:
+        with self._lock, self._db:
+            self._db.execute("INSERT INTO taste_events (created_at, kind, a, b, feature, value) VALUES (?, ?, ?, ?, ?, ?)",
+                             (now(), kind, json.dumps(a) if a is not None else None, json.dumps(b) if b is not None else None,
+                              feature, value))
+
+    def list_taste_events(self) -> list[dict]:
+        with self._lock:
+            rows = self._db.execute("SELECT * FROM taste_events ORDER BY id").fetchall()
+        return [{**dict(r), "a": json.loads(r["a"]) if r["a"] else None, "b": json.loads(r["b"]) if r["b"] else None} for r in rows]
 
     def add_checkin(self, checkin: dict) -> None:
         with self._lock, self._db:

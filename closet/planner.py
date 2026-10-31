@@ -335,8 +335,14 @@ def distinct_looks(plan: OutfitPlan) -> OutfitPlan:
     return plan
 
 
-def plan_with_rules(items: list[dict], weather: dict, calendar: dict, notes: str, today: date) -> OutfitPlan:
-    """Deterministic picker: warmth from the coldest feels-like, formality from events, forgotten pieces first."""
+TASTE_WEIGHT = 8  # one unit of learned taste is worth about 16 idle days
+
+
+def plan_with_rules(items: list[dict], weather: dict, calendar: dict, notes: str, today: date,
+                    taste_score: Callable[[list[dict]], float] | None = None) -> OutfitPlan:
+    """Deterministic picker: warmth from the coldest feels-like, formality from events, forgotten pieces first.
+    With `taste_score` (the learned taste's utility for an outfit), looks A and B are the best top + bottom
+    pairs by item score plus taste, so what the user has taught it shows up even without a model call."""
     cold = _coldest_feels_like(weather)
     target_warmth = 4 if cold < 3 else 3 if cold < 10 else 2 if cold < 18 else 1
     dressy = any(e.get("dress_code") for e in calendar.get("events", []))
@@ -364,8 +370,19 @@ def plan_with_rules(items: list[dict], weather: dict, calendar: dict, notes: str
     tops, bottoms, dresses, outer = by_cat("top"), by_cat("bottom"), by_cat("dress"), by_cat("outerwear")
 
     combos: list[tuple[dict, ...]] = []
-    if tops and bottoms:
+    if tops and bottoms and taste_score:
+        # A rescues the most forgotten piece and pairs it with what suits you; B is simply your best match today.
+        def suits(tb: tuple[dict, dict]) -> float:
+            return sum(score(i) - forgotten(i) * 0.5 for i in tb) + TASTE_WEIGHT * taste_score(list(tb))
+
+        pairs = [(t, b) for t in tops for b in bottoms]
+        hero = max(tops + bottoms, key=forgotten)
+        first = max((tb for tb in pairs if hero in tb), key=suits)
+        rest = [tb for tb in pairs if tb[0] is not first[0] and tb[1] is not first[1]] or [tb for tb in pairs if tb != first] or [first]
+        combos = [first, max(rest, key=suits)]
+    elif tops and bottoms:
         combos = [(tops[0], bottoms[0]), (tops[min(1, len(tops) - 1)], bottoms[min(1, len(bottoms) - 1)])]
+    if tops and bottoms:
         favourites = sorted(pool, key=lambda i: i["wear_count"], reverse=True)
         fav_top = next((i for i in favourites if i["tags"]["category"] == "top"), tops[-1])
         fav_bottom = next((i for i in favourites if i["tags"]["category"] == "bottom"), bottoms[-1])

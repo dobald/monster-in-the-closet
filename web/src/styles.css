@@ -205,6 +205,20 @@ img { display: block; max-width: 100%; }
 }
 .rule { border: 0; border-top: var(--line); margin: 0; width: 100%; }
 
+/* A Pinterest-style outfit board: the same pale grey in light and dark mode, so black and white
+   garments both read, with soft shadows lifting the cutouts off the board. */
+.collage {
+  position: relative;
+  display: block;
+  width: 100%;
+  aspect-ratio: 10 / 16;
+  border-radius: 10px;
+  border: var(--line);
+  background: #ebeae7;
+  overflow: hidden;
+}
+.collage img { filter: drop-shadow(0 6px 7px rgba(30, 27, 25, 0.22)); }
+
 .cutout {
   width: 100%;
   height: 100%;
