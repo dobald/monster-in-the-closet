@@ -22,8 +22,7 @@ Everything in this repository was written during the hackathon (Oct 26 – Nov 4
 | SAM 3.1 | Cuts every garment out of a flat-lay photo with one "clothing" prompt. |
 | Muse Spark 1.3 | Tags each item with structured output and checks render fidelity. |
 | Muse Image | Optional try-on on a faceless mannequin (default) or your own photo (opt-in). |
-| Muse Voice Transcribe | Voice tweaks: "nothing black, dinner outside" *(planned)* |
-| Muse Spark Open (via Baseten) | Open-weights brain: outfit planning, check-in learning, Ask *(in progress)* |
+| Muse Spark Open (via Baseten, an official inference partner of the hackathon) | Open-weights brain: the morning planning agent, occasion plans, check-in learning, the taste narrative |
 
 ## Day-0 findings (real closet, ~$1.60 total)
 
@@ -64,8 +63,12 @@ So the scan flow is flat-lay photo batches. Other findings:
 python -m venv .venv
 .venv\Scripts\activate          # Windows; use `source .venv/bin/activate` on macOS/Linux
 pip install -r requirements.txt
-copy .env.example .env          # then add MODEL_API_KEY
+copy .env.example .env          # then add MODEL_API_KEY (not needed for demo mode)
 ```
+
+No key is needed to try it: the API starts in demo (fixture) mode, and **Use a sample closet** in the app gives you nine pieces and a plan straight away. The tests never make paid calls either. They run with a dummy key and an unreachable address, so a call that wasn't stubbed fails at once.
+
+On Windows, clone to a short path (e.g. `C:\code\`). A few dependency files have long names, and very deep folders can hit the 260-character path limit during `pip install`.
 
 ## Backend API
 
@@ -119,6 +122,22 @@ Scan responses carry the same `duplicates` block for the items that scan added.
 1. **Redraw:** Muse Image gets the cutout and redraws the same garment laid flat and smoothed on a plain background. The prompt carries the item's tags and measured colour, and asks it to keep every print, text, stripe, pocket and seam.
 2. **Cut out:** SAM 3.1 cuts the redraw out exactly like a scan, so it sits on a card the same way.
 3. **Check:** the shot is only used if its measured colour is within ΔE 20 of the cutout's. A redraw that drifted is thrown away, and the app keeps showing the scan.
+
+**Measured on the real 9-item test closet:** 9/9 product shots passed the check. The gate is ΔE 20; the typical drift was far below it.
+
+| Item | ΔE (product shot vs scan) |
+|---|---|
+| Crewneck sweatshirt (black) | 0.6 |
+| Ribbed knit pants | 0.8 |
+| White henley | 1.2 |
+| Side-stripe track pants | 1.6 |
+| Corduroy bomber | 1.6 |
+| Acid-wash tee | 2.4 |
+| Zip-up hoodie | 2.4 |
+| Wide-leg jeans | 3.0 |
+| White tour tee (shot under a warm lamp; the redraw drops the yellow cast) | 12.8 |
+
+The item sheet shows each item's own number ("REDRAWN · ΔE 1.6") next to the Photo / My scan toggle.
 
 Each item gets one try, made once and shared by every closet (item ids hash their cutout). The app shows product shots everywhere: the closet, looks, this-or-that boards and check-ins. The item sheet has a **Photo / My scan** toggle to see the real cutout. The cutout stays the source of truth: tags, colour reads, duplicate checks and try-on all use it.
 
@@ -387,7 +406,17 @@ That run also exposed a judge bug: it scored the render 2/5 because the mannequi
 **Layered dress-up (the default for the mannequin).** Rendering every outfit cost about 70s and up to four model calls. Now each garment is dressed once and reused for every outfit:
 1. **Base, once per body profile.** Muse Image renders a plain white mannequin, then an edit recolours it to your finish, form and build. Asking for body details on a bare mannequin trips the content filter; recolouring an existing one doesn't.
 2. **Layer, once per garment.** Muse Image puts just that item on *that exact base image*. SAM 3.1 cuts the garment out, and the result is saved as a cropped transparent layer with its position on the base.
-3. **Outfit, instantly.** The app stacks the layers itself: bottoms, then tops, then outerwear. Switching looks (◀ ▶) or tapping a piece to take it off needs no model call.
+3. **Outfit, instantly.** The app stacks the layers itself. Switching looks (◀ ▶) or tapping a piece to take it off needs no model call.
+
+**Layers that sit like real clothes (`closet/layering.py`).** Each garment is rendered on the mannequin on its own, so an oversized tee comes out wider than the hoodie over it and its sleeves stuck out past the hoodie's shoulders. Two fixes apply to every combination, not just one look:
+- **Order from what the garment is.** Bottoms go first, then base tops (tee, shirt, henley), then mid layers (sweatshirt, knit, cardigan), then outer layers (jacket, coat, zip-up hoodie, overshirt). Two pieces of the same kind put the warmer one on top. The category alone used to call a shirt and a sweatshirt both "top".
+- **The outer layer hides what it covers.** For the pieces actually on the mannequin, every inner layer is cut back to where clothes really peek out:
+  - the neckline and an open front;
+  - below the outer hem or cuffs (a longer tee shows under a cropped hoodie);
+  - the arms, when the outer piece is short-sleeved or sleeveless.
+
+  Anything else outside the outer silhouette is hidden. Sleeve length is read from the tags (sleeveless, short or long).
+- **How it runs.** It is plain image maths on the cut-out layers, with no model calls, cached per combination. Take the hoodie off and the tee is whole again. Before the fix, look C showed the acid-wash tee's sleeves either side of the zip-up hoodie; now only its collar shows.
 
 `spike/layers.py` showed this works: separately rendered garments differ from the base by under 1% of pixels outside the garment, so the layers line up with no alignment step.
 
@@ -401,8 +430,35 @@ New scans are dressed in the background, and Notes has "Dress the mannequin with
 | `POST` / `DELETE /api/tryon/photo` | The face version: upload (multipart `photo` + `consent=true`), checked before it's kept; delete removes its renders |
 | `POST /api/tryon` | `{plan_id, look}`: starts or reuses a render job |
 | `GET /api/tryon/jobs/{id}` | Poll: status, progress step, score, differences, render and flat-lay URLs |
-| `POST /api/tryon/layers` | `{item_ids, prepare}`: base and per-garment layer states (with boxes), starting missing ones in live mode |
+| `POST /api/tryon/layers` | `{item_ids, prepare}`: base and per-garment layer states (with boxes and stacking rank), starting missing ones in live mode |
+| `POST /api/tryon/layers/stack` | `{item_ids}`: the pieces being worn, bottom first, each cut back to what the layers over it don't hide |
 | `GET /api/tryon/flatlay` | `?plan_id&look`: the exact flat-lay, without starting a render |
+
+## Deploy
+
+One container runs the API and serves the built app (`Dockerfile`). Everything the app writes goes to `/data`: every closet's database, cutouts and renders, plus the shared model cache. Mount a **persistent volume** there, or a redeploy wipes every closet.
+
+**Fly.io** (`fly.toml` is ready: a volume at `/data`, live mode with spend caps, a health check on `/api/ping`):
+
+```bash
+fly launch --no-deploy --copy-config     # pick a unique app name
+fly volumes create monster_data --size 1 --region yyz
+fly secrets set MODEL_API_KEY=... BASETEN_API_KEY=...
+fly deploy
+```
+
+Railway or Render work the same way: build from the `Dockerfile`, attach a volume or disk at `/data`, set the two keys as secrets and copy the `[env]` values from `fly.toml`. The container listens on 8080.
+
+**Spend cap** (`server/budget.py`). Every request that can call a paid model counts against two daily limits:
+- `MONSTER_DAILY_CALLS`: for the whole server (300 in `fly.toml`).
+- `MONSTER_CLOSET_DAILY_CALLS`: per closet (25).
+
+These requests are scans, plans, occasion plans, product shots, try-on, the gap finder, thrift examples, check-ins, duplicate checks and the taste narrative. Over either limit, that request runs in demo mode instead: recorded results and the rule planner, labelled DEMO DATA in the app, at no cost. The counts reset at midnight UTC and survive restarts. `/api/health` reports `budget_left`.
+
+**Checked before shipping:**
+- **The image:** built and run locally. It contains no `.env` and no `var/`.
+- **Persistence:** a closet made in one container (the sample closet and a plan) was still there after a restart and after replacing the container on the same volume.
+- **Health checks:** the probe on `/api/ping` never creates closets. `/api/health` would open a new closet per probe in device mode, which is why the probe doesn't use it.
 
 ## Testing on your phone
 

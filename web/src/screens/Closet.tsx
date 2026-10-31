@@ -183,7 +183,7 @@ export default function Closet({ ctx }: { ctx: AppCtx }) {
 
       {items && items.length === 0 && (
         <div className="card" style={{ padding: 16, display: "flex", flexDirection: "column", alignItems: "center", gap: 10, textAlign: "center" }}>
-          <Oni mood="restless" size={72} />
+          <Oni mood="starving" size={72} />
           <strong>Nothing in here yet.</strong>
           <button type="button" className="btn shu press block" onClick={() => ctx.go("scan")}>
             Scan my clothes →

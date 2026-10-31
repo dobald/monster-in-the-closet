@@ -24,6 +24,7 @@ export interface Item {
   id: string;
   cutout_url: string; // the real scan cutout
   photo_url: string; // what to show: a clean product shot of the same garment when there is one, else the cutout
+  photo_drift: number | null; // ΔE between the product shot's measured colour and the scan's (the shot is used only under 20)
   source: string;
   scan_id: string;
   created_at: string;
@@ -160,7 +161,7 @@ export interface TraceStep {
   ok?: boolean; // checks only
 }
 
-export type Mood = "restless" | "calm" | "proud" | "fed" | "sleepy";
+export type Mood = "starving" | "restless" | "calm" | "proud" | "fed" | "sleepy";
 
 export interface Oni {
   mood: Mood;
@@ -367,7 +368,7 @@ export type LayerStateName = "ready" | "pending" | "failed" | "missing" | "unsup
 export interface LayerState {
   item_id: string;
   category: string;
-  order: number; // stacking order: bottoms 1, tops 2, outerwear 3
+  order: number; // stacking rank (closet/layering.py): bottoms ~100, base tops ~200, mid layers ~250, outerwear ~300
   state: LayerStateName;
   url?: string;
   box?: [number, number, number, number]; // x, y, w, h on the base image
@@ -477,6 +478,8 @@ export const api = {
   deletePersonPhoto: () => call<{ renders_deleted: number }>("/api/tryon/photo", { method: "DELETE" }),
   startTryon: (planId: string, look: number) => call<TryOnJob>("/api/tryon", json("POST", { plan_id: planId, look })),
   tryonJob: (id: string) => call<TryOnJob>(`/api/tryon/jobs/${id}`),
+  tryonStack: (itemIds: string[]) =>
+    call<{ base_key: string; layers: { item_id: string; url: string; order: number }[] }>("/api/tryon/layers/stack", json("POST", { item_ids: itemIds, prepare: false })),
   tryonLayers: (itemIds: string[], prepare = true) =>
     call<LayersStatus>("/api/tryon/layers", json("POST", { item_ids: itemIds, prepare })),
   flatlay: (planId: string, look: number) =>

@@ -470,6 +470,19 @@ function DressUp({ plan, initialLook, ctx, onSetup, onClose }: {
   const pieces = look.items.map((it) => ({ item: it, layer: byId.get(it.id) }));
   const shown = pieces.filter((p) => p.layer?.state === "ready" && !off.has(p.item.id)).sort((a, b) => a.layer!.order - b.layer!.order);
   const making = pieces.filter((p) => p.layer?.state === "pending");
+  // What's worn right now, cut back so inner layers don't poke out from under outer ones. Until the
+  // server answers for this exact set, the pieces wait rather than flash their untrimmed edges.
+  const shownIds = shown.map((p) => p.item.id).join(",");
+  const shownKey = `${status?.base_key ?? ""}|${shownIds}`; // a new mannequin means new layer images
+  const [stack, setStack] = useState<{ key: string; byId: Map<string, { url: string; order: number }> } | null>(null);
+  useEffect(() => {
+    if (!shownIds) return;
+    api
+      .tryonStack(shownIds.split(","))
+      .then((r) => setStack({ key: shownKey, byId: new Map(r.layers.map((l) => [l.item_id, l])) }))
+      .catch(() => setStack({ key: shownKey, byId: new Map() })); // fall back to the plain layers
+  }, [shownKey]);
+  const stacked = stack?.key === shownKey ? stack.byId : null;
   const [W, H] = status?.base.size ?? [1120, 2240];
   const baseMsg = error ?? (status?.base.state === "failed" ? "Couldn't set up the mannequin." : status?.base.state === "missing" ? "No mannequin made yet." : null);
 
@@ -508,16 +521,17 @@ function DressUp({ plan, initialLook, ctx, onSetup, onClose }: {
             {status?.base.state === "ready" ? (
               <>
                 <img src={status.base.url} alt="Your mannequin" style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }} />
-                {shown.map(({ item, layer }) => {
+                {stacked && shown.map(({ item, layer }) => {
                   const [x, y, w, h] = layer!.box!;
+                  const cut = stacked.get(item.id);
                   return (
                     <img
                       key={item.id}
-                      src={layer!.url}
+                      src={cut?.url ?? layer!.url}
                       alt={itemName(item)}
                       style={{
                         position: "absolute", left: `${(x / W) * 100}%`, top: `${(y / H) * 100}%`, width: `${(w / W) * 100}%`, height: `${(h / H) * 100}%`,
-                        zIndex: layer!.order, animation: "fade .25s ease-out both",
+                        zIndex: cut?.order ?? layer!.order, animation: "fade .25s ease-out both",
                       }}
                     />
                   );

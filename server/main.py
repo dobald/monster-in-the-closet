@@ -25,6 +25,7 @@ from closet.schema import Garment
 from . import settings as settings_mod
 from .cache import Cache
 from .closets import MAIN, SCOPE_KEY, Closet, ClosetMiddleware, Closets, ClosetsFull, current_id
+from .budget import Budget, BudgetMiddleware
 from .calfeed import FeedError
 from .pipeline import FixtureMissing
 from .planning import today_local
@@ -45,6 +46,7 @@ class ItemOut(BaseModel):
     id: str
     cutout_url: str  # the real scan cutout
     photo_url: str  # what to show: the clean product shot when there is one, else the cutout
+    photo_drift: float | None = None  # ΔE between the product shot's measured colour and the scan's
     source: str
     scan_id: str
     created_at: str
@@ -149,12 +151,14 @@ async def lifespan(app: FastAPI):
     app.state.settings, app.state.cache = s, cache
     app.state.closets = Closets(s, cache, int(os.environ.get("MONSTER_MAX_CLOSETS", "200")))
     app.state.examples = Examples(s)  # thrift example photos are generic, so every closet shares them
+    app.state.budget = Budget(s.cache_dir / "budget.json")  # daily spend cap for a public live deploy
     app.state.products = Products(s)  # product shots are keyed by item id (a cutout hash), so closets share them too
     yield
 
 
 app = FastAPI(title="Monster in the Closet API", version="0.1.0", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(BudgetMiddleware)  # runs inside ClosetMiddleware, so it knows the closet
 app.add_middleware(ClosetMiddleware)  # added last, so it runs first
 
 
@@ -168,20 +172,37 @@ def C() -> Closet:
 
 def _item_out(d: dict) -> ItemOut:
     cutout_url = f"/api/cutouts/{d['id']}.png"
-    return ItemOut(**{k: v for k, v in d.items() if k in ItemOut.model_fields and k not in ("cutout_url", "photo_url")},
-                   cutout_url=cutout_url, photo_url=app.state.products.url(d["id"]) or cutout_url)
+    products = app.state.products
+    return ItemOut(**{k: v for k, v in d.items() if k in ItemOut.model_fields and k not in ("cutout_url", "photo_url", "photo_drift")},
+                   cutout_url=cutout_url, photo_url=products.url(d["id"]) or cutout_url, photo_drift=products.drift(d["id"]))
+
+
+# The built front end (npm run build), served by the API in production so one process runs the app.
+# In development Vite serves it instead and proxies /api here.
+WEB_DIST = Path(os.environ.get("MONSTER_WEB_DIST", config.ROOT / "web" / "dist")).resolve()
 
 
 @app.get("/", include_in_schema=False)
-def root() -> RedirectResponse:
-    """No front end yet: send the browser to the interactive API docs."""
+def root():
+    """The app when it has been built, else the interactive API docs."""
+    if (WEB_DIST / "index.html").exists():
+        return FileResponse(WEB_DIST / "index.html", headers={"Cache-Control": "no-cache"})
     return RedirectResponse("/docs")
+
+
+@app.get("/api/ping")
+def ping() -> dict:
+    """For a host's health check: touches no closet, so a probe never creates closet folders."""
+    return {"ok": True}
 
 
 @app.get("/api/health")
 def health() -> dict:
     s = app.state.settings
-    return {"ok": True, "mode": s.mode, "tag_model": config.TAG_MODEL[config.TAG_PROVIDER], **C().store.counts()}
+    # "fixture" also when a live server has used up today's spend cap: the app then labels demo data.
+    left = app.state.budget.left(current_id())
+    return {"ok": True, "mode": "live" if s.live and left != 0 else "fixture", "tag_model": config.TAG_MODEL[config.TAG_PROVIDER],
+            "budget_left": left, **C().store.counts()}
 
 
 @app.post("/api/scans", response_model=ScanOut)
@@ -630,6 +651,16 @@ async def tryon_layers(body: LayersIn) -> dict:
     return C().layers.status(p["body"], body.item_ids[:60], prepare=body.prepare)
 
 
+@app.post("/api/tryon/layers/stack")
+def tryon_stack(body: LayersIn) -> dict:
+    """The pieces on the mannequin right now, in stacking order, each cut back to what the layers over it
+    don't hide (a tee's sleeves under a hoodie). Send exactly the pieces being worn: taking one off changes it."""
+    p = C().tryon.profile()
+    if p["mode"] != "mannequin" or not p["body"]:
+        raise HTTPException(409, "Layered try-on needs the mannequin set up.")
+    return C().layers.stack(p["body"], body.item_ids[:12])
+
+
 @app.get("/api/layers/{base_key}/{name}.png")
 def layer_file(base_key: str, name: str) -> FileResponse:
     path = C().layers.root / base_key / f"{name}.png"
@@ -953,3 +984,15 @@ def seed(body: SeedIn) -> dict:
     if out_root not in run_dir.parents or not (run_dir / "cutouts").is_dir():
         raise HTTPException(422, "run must be a spike output folder under out/ with a cutouts/ folder.")
     return C().pipeline.seed_from_run(Path(run_dir))
+
+
+@app.get("/{path:path}", include_in_schema=False)
+def web_app(path: str) -> FileResponse:
+    """Files from the built front end (hashed assets are cached for good); any other path gets the app."""
+    if path.startswith("api/") or not (WEB_DIST / "index.html").exists():
+        raise HTTPException(404, "Not found.")
+    f = (WEB_DIST / path).resolve()
+    if WEB_DIST in f.parents and f.is_file():
+        immutable = f.parent.name == "assets"
+        return FileResponse(f, headers={"Cache-Control": "public, max-age=31536000, immutable" if immutable else "no-cache"})
+    return FileResponse(WEB_DIST / "index.html", headers={"Cache-Control": "no-cache"})

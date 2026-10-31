@@ -16,6 +16,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+# No paid calls, ever: a dummy key and an unreachable address are set before closet.config reads
+# .env (which never overrides what is already set), so a call a test forgot to stub fails at once.
+for _k in ("MODEL_API_KEY", "BASETEN_API_KEY"):
+    os.environ[_k] = "offline-tests"
+for _k in ("MODEL_API_BASE_URL", "BASETEN_BASE_URL"):
+    os.environ[_k] = "http://127.0.0.1:9/v1"
+
 from fastapi.testclient import TestClient  # noqa: E402
 from PIL import Image, ImageDraw  # noqa: E402
 
@@ -101,10 +108,11 @@ def test_live_mode_caches(var_dir: Path) -> None:
         calls["tag"] += 1
         return Garment.model_validate(GARMENT)
 
-    from server import pipeline
-    orig = (pipeline.scan.scan_image, pipeline.models.tag_garment, pipeline.config.async_client_for)
+    from server import pipeline, products as products_mod
+    orig = (pipeline.scan.scan_image, pipeline.models.tag_garment, pipeline.config.async_client_for, products_mod.models._edit)
     pipeline.scan.scan_image, pipeline.models.tag_garment = fake_scan_image, fake_tag
     pipeline.config.async_client_for = lambda provider="meta": None
+    products_mod.models._edit = lambda images, prompt: (None, "stubbed: no paid calls in tests")  # the scan starts product shots
     try:
         with client_for("live", var_dir) as c:
             files = [("photos", ("bed.jpg", photo_bytes(7), "image/jpeg")), ("photos", ("bed2.jpg", photo_bytes(8), "image/jpeg"))]
@@ -117,7 +125,7 @@ def test_live_mode_caches(var_dir: Path) -> None:
             assert again["cached_photos"] == 1 and not again["replayed"], again
             assert calls == {"scan": 2, "tag": 2}, f"cache miss on a repeated photo: {calls}"
     finally:
-        pipeline.scan.scan_image, pipeline.models.tag_garment, pipeline.config.async_client_for = orig
+        pipeline.scan.scan_image, pipeline.models.tag_garment, pipeline.config.async_client_for, products_mod.models._edit = orig
 
 
 BOTTOM = {**GARMENT, "category": "bottom", "subtype": "wide-leg jeans", "primary_color": "indigo",
@@ -255,7 +263,7 @@ def test_plan_wear_checkin(var_dir: Path, run_dir: Path) -> None:
         layers._put_meta(bk, top_id, {"status": "ready", "box": [30, 40, 40, 50], "size": [100, 200]})
         st = c.post("/api/tryon/layers", json={"item_ids": ids, "prepare": False}).json()
         top = next(l for l in st["layers"] if l["item_id"] == top_id)
-        assert st["base"]["state"] == "ready" and top["state"] == "ready" and top["box"] == [30, 40, 40, 50] and top["order"] == 2, st
+        assert st["base"]["state"] == "ready" and top["state"] == "ready" and top["box"] == [30, 40, 40, 50] and top["order"] == 253, st  # a crewneck sweatshirt is a mid layer (closet/layering.py)
         assert c.get(top["url"]).status_code == 200 and c.get(st["base"]["url"]).status_code == 200
         assert c.get(f"/api/layers/{bk}/..%2Fbase.png").status_code == 404
         # Changing the body makes a new base key: layers belong to one mannequin.
@@ -882,6 +890,7 @@ def test_products(var_dir: Path) -> None:
             by_colour = {i["tags"]["primary_color"] + str(n): i for n, i in enumerate(c.get("/api/wardrobe").json())}
             shown = [i for i in by_colour.values() if i["photo_url"] != i["cutout_url"]]
             assert len(shown) == 1 and shown[0]["photo_url"].endswith(".webp"), by_colour
+            assert shown[0]["photo_drift"] == 0.0 and all(i["photo_drift"] is None for i in by_colour.values() if i is not shown[0])
             assert c.get(shown[0]["photo_url"]).headers["content-type"] == "image/webp"
             drifted = next(i for i in by_colour.values() if i["photo_url"] == i["cutout_url"])
             note = json.loads((main.app.state.products.dir / f"{drifted['id']}.json").read_text())
@@ -987,6 +996,99 @@ def test_occasions(var_dir: Path) -> None:
         planning_mod.calfeed.fetch = orig
 
 
+
+def test_deploy(var_dir: Path) -> None:
+    """A public deploy: the spend cap turns a live server into demo mode for the day, and the API serves the app."""
+    dist = var_dir / "dist"
+    (dist / "assets").mkdir(parents=True)
+    (dist / "index.html").write_text("<!doctype html><title>app</title>")
+    (dist / "assets" / "app-1.js").write_text("console.log(1)")
+    os.environ.update({"MONSTER_CLOSET_DAILY_CALLS": "1", "MONSTER_CLOSETS": "device"})
+    main.WEB_DIST = dist.resolve()
+    try:
+        with client_for("live", var_dir) as c:
+            h = c.get("/api/health").json()
+            assert h["mode"] == "live" and h["budget_left"] == 1, h
+            assert c.post("/api/products").json()["live"], "the first paid request runs live"
+            h = c.get("/api/health").json()
+            assert h["mode"] == "fixture" and h["budget_left"] == 0, h
+            assert not c.post("/api/products").json()["live"], "over the cap, a paid request runs as demo"
+            assert c.post("/api/closet/new").status_code == 200
+            assert c.get("/api/health").json()["budget_left"] == 1, "the cap is per closet"
+            assert c.post("/api/plans/nope/wear", json={"look": 0}).status_code in (404, 422)
+
+            before = main.app.state.closets.count()
+            assert all(c.get("/api/ping", cookies={}).json() == {"ok": True} for _ in range(3))
+            assert main.app.state.closets.count() == before, "health probes never create closets"
+            assert "<title>app</title>" in c.get("/").text and "<title>app</title>" in c.get("/closet/anything").text
+            r = c.get("/assets/app-1.js")
+            assert r.text == "console.log(1)" and "immutable" in r.headers["cache-control"], r.headers
+            assert c.get("/api/nope").status_code == 404 and c.get("/../.env").status_code in (404, 200)
+            assert "MODEL_API_KEY" not in c.get("/../.env").text
+    finally:
+        for k in ("MONSTER_CLOSET_DAILY_CALLS", "MONSTER_CLOSETS"):
+            os.environ.pop(k, None)
+        main.WEB_DIST = (config.ROOT / "web" / "dist").resolve()
+
+
+
+def test_layering(var_dir: Path) -> None:
+    """Layers stack by what they are, and an inner layer never pokes out from under an outer one."""
+    import numpy as np
+
+    from closet import layering
+    from closet.schema import Garment
+
+    t = lambda cat, sub, fit="regular": {"category": cat, "subtype": sub, "fit": fit, "warmth": 2}  # noqa: E731
+    tee, crew = t("top", "graphic t-shirt", "loose, oversized"), t("top", "crewneck sweatshirt", "regular, long sleeve")
+    hoodie, jeans = t("outerwear", "zip-up hoodie", "relaxed"), t("bottom", "wide-leg jeans")
+    assert layering.rank(jeans) < layering.rank(tee) < layering.rank(crew) < layering.rank(hoodie)
+    assert layering.rank(t("top", "corduroy overshirt")) == layering.rank(t("top", "bomber jacket")), "an overshirt is an outer layer"
+    assert [layering.sleeves(x) for x in (tee, crew, hoodie, t("outerwear", "puffer vest"))] == ["short", "long", "long", "none"]
+
+    # A hoodie (torso + long sleeves) over an oversized tee whose sleeves stick out sideways,
+    # whose hem hangs below the hoodie's, and whose collar shows at the neck.
+    outer = np.zeros((100, 100), np.uint8)
+    outer[20:80, 30:70] = 255
+    outer[25:75, 22:30] = 255
+    outer[25:75, 70:78] = 255
+    inner = np.zeros((100, 100), np.uint8)
+    inner[22:90, 32:68] = 255   # torso, longer than the hoodie
+    inner[25:45, 12:32] = 255   # left sleeve, wider than the hoodie sleeve
+    inner[25:45, 68:88] = 255   # right sleeve
+    inner[14:22, 44:56] = 255   # collar above the hoodie's neckline
+    cut = layering.occlude(inner, outer, outer_long_sleeves=True)
+    assert not cut[25:45, 12:22].any() and not cut[25:45, 78:88].any(), "sleeves beside a long sleeve are hidden"
+    assert cut[82:90, 35:65].all(), "a longer hem still peeks out below"
+    assert cut[14:20, 46:54].all(), "the collar shows at the neck"
+    assert cut[30:40, 40:60].all(), "under the outer is left alone (it's drawn over anyway)"
+    short = layering.occlude(inner, outer, outer_long_sleeves=False)
+    assert short[25:45, 12:22].all(), "under a short-sleeved or sleeveless outer, the inner sleeves show"
+
+    # The server cuts back layers for exactly the pieces being worn, and caches each combination.
+    with client_for("fixture", var_dir) as c:
+        closet = main.app.state.closets.get("main")
+        body = {"height_cm": 170}
+        key = closet.layers.base_key(body)
+        (closet.layers.root / key).mkdir(parents=True, exist_ok=True)
+        from PIL import Image
+        for item_id, tags, mask in (("teeitem", tee, inner), ("hoodieitem", hoodie, outer)):
+            closet.store.upsert_item(item_id, "s", "x", None, Garment.model_validate({**GARMENT, **tags}), None)
+            Image.fromarray(np.dstack([np.full((100, 100, 3), 90, np.uint8), mask]), "RGBA").save(closet.layers.root / key / f"{item_id}.png")
+            (closet.layers.root / key / f"{item_id}.json").write_text(json.dumps({"status": "ready", "box": [0, 0, 100, 100], "size": [100, 100]}))
+        st = closet.layers.stack(body, ["hoodieitem", "teeitem"])
+        assert [(l["item_id"], l["order"]) for l in st["layers"]] == [("teeitem", 1), ("hoodieitem", 2)], st
+        tee_url = st["layers"][0]["url"]
+        assert tee_url != f"/api/layers/{key}/teeitem.png" and st["layers"][1]["url"].endswith("hoodieitem.png"), st
+        png = closet.layers.root / key / (tee_url.rsplit("/", 1)[1])
+        a = np.asarray(Image.open(png))[..., 3]
+        assert not a[25:45, 12:22].any() and a[82:90, 35:65].all(), "the served tee is cut back"
+        alone = closet.layers.stack(body, ["teeitem"])["layers"][0]["url"]
+        assert alone == f"/api/layers/{key}/teeitem.png", "take the hoodie off and the tee is whole again"
+        assert closet.layers.stack(body, ["teeitem", "hoodieitem"])["layers"][0]["url"] == tee_url, "cached per combination"
+        assert c.get(tee_url).status_code == 200
+
+
 def main_() -> None:
     tmp = Path(tempfile.mkdtemp(prefix="monster-test-"))
     run_dir = config.ROOT / "out" / f"_test_seed_{tmp.name}"
@@ -1019,8 +1121,10 @@ def main_() -> None:
         test_styles(tmp / "styles")
         test_products(tmp / "products")
         test_occasions(tmp / "occasions")
+        test_deploy(tmp / "deploy")
+        test_layering(tmp / "layering")
         print("OK: fixture mode, seeding, tag fixes, caching, dedupe, planning, wear, check-ins, the agent loop, gap finder, try-on, layered try-on, getting started, finishing touches, colour reads, "
-              "cross-photo duplicates, per-device closets, the sample closet, plans made ahead, the morning wear question, the taste model, outfit scoring, style archetypes, product shots, occasions and calendar links all behave.")
+              "cross-photo duplicates, per-device closets, the sample closet, plans made ahead, the morning wear question, the taste model, outfit scoring, style archetypes, product shots, occasions, calendar links, the spend cap, app serving and layer occlusion all behave.")
     finally:
         shutil.rmtree(run_dir, ignore_errors=True)
         shutil.rmtree(tmp, ignore_errors=True)

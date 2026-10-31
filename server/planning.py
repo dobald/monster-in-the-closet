@@ -327,7 +327,8 @@ class Planning:
         elif hour >= 21 or hour < 5:
             mood = "sleepy"
         else:
-            mood = "restless" if pct < 25 else "calm" if pct <= 60 else "proud"
+            # It lives on what you wear: under a third of the closet worn this month and it's starving.
+            mood = "starving" if pct < 35 else "calm" if pct <= 70 else "proud"
         # Without any wear history (logged or estimated) the % is a made-up number, so the app hides it.
         return {"mood": mood, "closet_alive_pct": pct, "garments": len(items), "has_history": any(i["last_worn"] for i in items),
                 "forgotten": len(forgotten), "streak_days": streak}

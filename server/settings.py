@@ -20,6 +20,8 @@ from pathlib import Path
 
 from closet import config
 
+from . import budget
+
 MODES = ("fixture", "live")
 CLOSET_MODES = ("single", "device")
 
@@ -33,7 +35,8 @@ class Settings:
 
     @property
     def live(self) -> bool:
-        return self.mode == "live"
+        # Over today's spend cap (server/budget.py), a request runs as fixture mode.
+        return self.mode == "live" and not budget.exhausted()
 
     @property
     def db_path(self) -> Path:

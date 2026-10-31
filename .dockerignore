@@ -1,0 +1,20 @@
+# Never ship secrets or personal data into an image.
+.env
+data/
+out/
+var/
+*.mp4
+*.mov
+*.heic
+
+# Not needed to run
+.git/
+.venv/
+**/__pycache__/
+web/node_modules/
+web/dist/
+spike/
+tests/
+docs/
+scripts/
+.claude/

@@ -159,7 +159,7 @@ function Hello({ profile, onNext }: { profile: Profile; onNext: () => void }) {
         <span lang="ja" aria-hidden="true" className="vertical" style={{ fontSize: 22 }}>はじめまして</span>
       </div>
       <div style={{ display: "flex", gap: 12, alignItems: "flex-end" }}>
-        <Oni mood={has ? "calm" : "restless"} size={88} />
+        <Oni mood={has ? "calm" : "starving"} size={88} />
         <Bubble>
           Every closet app wants to style you. I'm the monster in yours, and I <strong>starve when your clothes go unworn</strong>. So every
           morning I dress you from what you already own, forgotten pieces first.

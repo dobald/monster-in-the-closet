@@ -36,6 +36,13 @@ class Products:
     def url(self, item_id: str) -> str | None:
         return f"/api/products/{item_id}.webp" if (self.dir / f"{item_id}.webp").exists() else None
 
+    def drift(self, item_id: str) -> float | None:
+        """How far the product shot's measured colour is from the scan's (ΔE), if there is a shot."""
+        meta = self.dir / f"{item_id}.json"
+        if not (self.dir / f"{item_id}.webp").exists() or not meta.exists():
+            return None
+        return json.loads(meta.read_text()).get("drift")
+
     def _tried(self, item_id: str) -> bool:
         return (self.dir / f"{item_id}.webp").exists() or (self.dir / f"{item_id}.json").exists()
 
@@ -83,5 +90,5 @@ class Products:
             shot.thumbnail((EDGE, EDGE))
             shot.save(self.dir / f"{item_id}.webp", format="WEBP", quality=85, method=6)
             self._note(item_id, ok=True, drift=round(drift, 1))
-        except Exception as e:  # noqa: BLE001  one bad item shouldn't stop the rest; the scan is still shown
+        except (Exception, SystemExit) as e:  # noqa: BLE001  one bad item (or a missing API key) shouldn't stop the rest
             self._note(item_id, ok=False, reason=f"{type(e).__name__}: {e}"[:300])

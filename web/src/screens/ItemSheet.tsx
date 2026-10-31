@@ -55,6 +55,10 @@ export default function ItemSheet({ item, ctx, onClose }: { item: Item; ctx: App
         <div className="halftone" style={{ position: "relative", height: 300, border: "var(--line)", borderRadius: 12, padding: 18 }}>
           <img className="cutout" src={showScan || !tidy ? item.cutout_url : item.photo_url} alt={itemName(item)} />
           {tidy && (
+            <>
+            <span className="label" title="Muse Image redrew your scan as a product photo; SAM cut it out. It is only used when its measured colour stays close to the scan's." style={{ position: "absolute", left: 10, bottom: 14, fontSize: 9, background: "var(--washi)", border: "var(--line)", borderRadius: 4, padding: "2px 6px" }}>
+              {showScan ? "YOUR SCAN" : item.photo_drift != null ? `REDRAWN · ΔE ${item.photo_drift.toFixed(1)}` : "REDRAWN"}
+            </span>
             <div role="radiogroup" aria-label="Picture" style={{ position: "absolute", right: 10, bottom: 10, display: "flex", gap: 6 }}>
               {([[false, "Photo"], [true, "My scan"]] as const).map(([scan, text]) => (
                 <button key={text} type="button" role="radio" aria-checked={showScan === scan} className="chip press" style={{ height: 30, fontSize: 12, padding: "0 10px" }} onClick={() => setShowScan(scan)}>
@@ -62,6 +66,7 @@ export default function ItemSheet({ item, ctx, onClose }: { item: Item; ctx: App
                 </button>
               ))}
             </div>
+            </>
           )}
           {idle >= 30 && (
             <span className="sticker" style={{ position: "absolute", top: 12, left: 10, fontSize: 12 }}>

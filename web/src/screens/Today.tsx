@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, ApiError, idleDays, itemName, shortName, type Item, type Look, type Plan, type WeatherPart } from "../api";
+import { api, ApiError, idleDays, itemName, shortName, type Item, type Look, type Mood, type Plan, type WeatherPart } from "../api";
 import type { AppCtx } from "../App";
 import Oni, { MOOD_LABEL } from "../Oni";
 import { ComingUp } from "./Occasions";
@@ -125,26 +125,9 @@ export default function Today({ ctx }: { ctx: AppCtx }) {
 
       <Ticker plan={plan} now={now} />
 
-      <button
-        type="button"
-        onClick={() => ctx.go("notes")}
-        style={{ display: "flex", alignItems: "center", gap: 12, border: 0, background: "transparent", padding: 0, textAlign: "left" }}
-        aria-label={`Oni is ${MOOD_LABEL[mood].en}.${ctx.oni?.has_history ? ` Closet alive ${ctx.oni.closet_alive_pct}%.` : ""} Open notes.`}
-      >
-        <Oni mood={mood} size={52} />
-        <span style={{ flex: 1, display: "flex", flexDirection: "column", gap: 4 }}>
-          <span style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-            <span style={{ fontWeight: 700, fontSize: 14 }}>
-              {MOOD_LABEL[mood].en} <span lang="ja" style={{ fontWeight: 500, fontSize: 12 }}>{MOOD_LABEL[mood].ja}</span>
-            </span>
-            <span className="label">{ctx.oni?.has_history ? `CLOSET ALIVE ${ctx.oni.closet_alive_pct}%` : "NO WEAR HISTORY YET"}</span>
-          </span>
-          {ctx.oni?.has_history && <AliveBar pct={ctx.oni.closet_alive_pct} />}
-        </span>
-      </button>
+      <OniHero ctx={ctx} mood={wornLook !== null ? "fed" : mood} look={load.state === "ready" ? look : undefined} />
 
       <Yesterday ctx={ctx} />
-      {load.state === "ready" && look && wornLook !== lookIndex && <RescueLine look={look} />}
 
       {load.state === "empty" && <EmptyCloset msg={load.msg} ctx={ctx} />}
       {load.state === "error" && (
@@ -394,23 +377,63 @@ function Yesterday({ ctx }: { ctx: AppCtx }) {
 // Garments English treats as plural ("the jeans have"), for the oni's sentences.
 const PLURAL = /(pants|jeans|trousers|shorts|chinos|leggings|joggers|sweatpants|overalls|sneakers|trainers|boots|shoes|socks)$/i;
 
-// The oni's voice over the look: how long its most forgotten piece has waited. Estimates say "about".
-function RescueLine({ look }: { look: Look }) {
-  const ranked = look.items.map((i) => ({ i, d: idleDays(i) })).sort((a, b) => b.d - a.d);
-  const top = ranked[0];
-  if (!top || top.d < 30) return null;
-  const days = `${top.i.worn_estimated ? "about " : ""}${top.d} days`;
+// The hero: the oni itself. Its body is the closet (thin when most of it goes unworn, round when
+// it's worn), and it speaks for the piece it's hungriest for in today's pick. Estimates say "about".
+function OniHero({ ctx, mood, look }: { ctx: AppCtx; mood: Mood; look?: Look }) {
+  const oni = ctx.oni;
+  const known = !!oni?.has_history;
+  const fullness = mood === "fed" ? 1 : known ? oni!.closet_alive_pct / 100 : undefined;
+  const top = look?.items.map((i) => ({ i, d: idleDays(i) })).sort((a, b) => b.d - a.d)[0];
+  const plural = !!top && PLURAL.test(top.i.tags?.subtype ?? "");
+  const hungry = mood === "starving" || mood === "restless" || mood === "calm";
+
+  let line: React.ReactNode = MOOD_LABEL[mood].line;
+  if (mood !== "fed" && mood !== "sleepy" && top && top.d >= 30) {
+    line = (
+      <>
+        {mood === "starving" ? "I'm starving. " : hungry ? "I'm hungry. " : ""}Your <strong>{itemName(top.i).toLowerCase()}</strong>{" "}
+        {plural ? "have" : "has"} been in here {top.i.worn_estimated ? "about " : ""}{top.d} days. Wear {plural ? "them" : "it"} today and I eat.
+      </>
+    );
+  }
+
   return (
-    <p
-      aria-live="polite"
-      style={{
-        margin: "2px 0 -6px", alignSelf: "flex-start", border: "var(--line)", borderRadius: "2px 12px 12px 12px", padding: "8px 12px",
-        background: "var(--washi)", fontSize: 14, lineHeight: 1.45, fontWeight: 500, animation: "rise .3s ease-out both",
-      }}
-    >
-      Your <strong>{itemName(top.i).toLowerCase()}</strong> {PLURAL.test(top.i.tags?.subtype ?? "") ? "have" : "has"} been in here {days}. Today{" "}
-      {PLURAL.test(top.i.tags?.subtype ?? "") ? "they get" : "it gets"} out.
-    </p>
+    <section aria-label="The oni" style={{ display: "grid", gridTemplateColumns: "auto 1fr", alignItems: "end", gap: 12, marginTop: 4 }}>
+      <button
+        type="button"
+        onClick={() => ctx.go("notes")}
+        aria-label={`Oni is ${MOOD_LABEL[mood].en}.${known ? ` Closet alive ${oni!.closet_alive_pct}%.` : ""} Open notes.`}
+        style={{ border: 0, background: "transparent", padding: "0 10px 0 0", position: "relative" }}
+      >
+        <Oni mood={mood} size={118} fullness={fullness} />
+      </button>
+      <div style={{ display: "flex", flexDirection: "column", gap: 8, minWidth: 0, paddingBottom: 6 }}>
+        <p
+          aria-live="polite"
+          style={{
+            position: "relative", margin: 0, border: "var(--line)", borderRadius: "14px 14px 14px 2px", padding: "9px 12px",
+            background: "var(--washi)", fontSize: 14, lineHeight: 1.45, fontWeight: 500, boxShadow: "3px 3px 0 var(--sumi)",
+            animation: "rise .3s ease-out both",
+          }}
+        >
+          <span className="label" style={{ display: "block", fontSize: 10, marginBottom: 2 }}>
+            {MOOD_LABEL[mood].en.toUpperCase()} · <span lang="ja">{MOOD_LABEL[mood].ja}</span>
+          </span>
+          {line}
+        </p>
+        {known ? (
+          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+            <span className="label" style={{ display: "flex", justifyContent: "space-between", fontSize: 10 }}>
+              <span>BELLY · CLOSET {oni!.closet_alive_pct}% ALIVE</span>
+              {oni!.forgotten > 0 && <span style={{ color: "var(--shu)" }}>{oni!.forgotten} FORGOTTEN</span>}
+            </span>
+            <AliveBar pct={oni!.closet_alive_pct} />
+          </div>
+        ) : (
+          <span className="small" style={{ fontSize: 12 }}>Tell me what you've worn lately and I'll know how hungry I am.</span>
+        )}
+      </div>
+    </section>
   );
 }
 
@@ -680,7 +703,7 @@ function EmptyCloset({ msg, ctx }: { msg: string; ctx: AppCtx }) {
   };
   return (
     <div className="card" style={{ marginTop: 10, padding: 16, display: "flex", flexDirection: "column", alignItems: "center", gap: 12, textAlign: "center" }}>
-      <Oni mood="restless" size={80} />
+      <Oni mood="starving" size={80} />
       <h2 className="display" style={{ fontSize: 26 }}>FEED ME CLOTHES</h2>
       <p style={{ margin: 0, fontSize: 14, lineHeight: 1.5 }}>
         {empty ? "Your closet is empty. Lay a few things flat (up to 8), take a photo, and I'll pick an outfit from what you own." : msg}

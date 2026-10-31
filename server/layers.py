@@ -9,8 +9,11 @@ rendered separately line up without any alignment step. So:
   body profile.
 - layer: the base dressed in a single garment, cut out with SAM 3.1, cropped to its box.
   Once per garment per base.
-- outfit: the app stacks layers on the base (bottoms, then tops, then outerwear). Free and
-  instant, so swapping looks or taking a piece off costs nothing.
+- outfit: the app stacks layers on the base in closet/layering.py's order (bottoms, base tops,
+  mid layers, outerwear). Free and instant, so swapping looks or taking a piece off costs nothing.
+- stack: for the pieces actually on the mannequin, each inner layer is cut back to what the
+  layers over it don't hide (closet/layering.occlude), so an oversized tee's sleeves can't stick
+  out past a hoodie. Cached per combination; plain image maths, no model calls.
 
 Everything is cached on disk under var/layers/<base key>/. Fixture mode serves what exists
 and never generates. Only tops, bottoms, dresses and outerwear get layers.
@@ -27,14 +30,15 @@ import meta_sam_parser as sp
 import numpy as np
 from PIL import Image
 
-from closet import config, media, models, sam
+from closet import config, layering, media, models, sam
 from closet.schema import SILHOUETTE_WORDS, SKIN_TONES, BodyProfile, Garment
 
 from .cache import sha256
 from .settings import Settings
 from .store import Store
 
-ORDER = {"bottom": 1, "dress": 1, "top": 2, "outerwear": 3}  # stacking order, bottom first
+ORDER = {"bottom": 1, "dress": 1, "top": 2, "outerwear": 3}  # categories that get layers (rank: closet/layering.py)
+OCCLUDE_VERSION = "o1"  # bump when closet/layering.occlude changes, so cut-back layers are made again
 KEEP_AREA = {"bottom": "upper body and arms", "top": "legs and feet", "outerwear": "legs and feet",
              "dress": "arms and lower legs"}
 CANVAS = (1024, 2048)
@@ -153,9 +157,52 @@ class Layers:
             if cat not in ORDER:
                 layers.append({"item_id": it["id"], "category": cat, "order": 0, "state": "unsupported"})
                 continue
-            layers.append({"item_id": it["id"], "category": cat, "order": ORDER[cat], **self._state(key, it["id"])})
+            order = round(100 * layering.rank(it["tags"]))  # bottoms ~100, base tops ~200, mid ~250, outer ~300
+            layers.append({"item_id": it["id"], "category": cat, "order": order, **self._state(key, it["id"])})
         note = None if self.settings.live else "Layers are made in live mode; showing the ones already made."
         return {"base_key": key, "base": base, "layers": layers, "live": self.settings.live, "note": note}
+
+    def stack(self, body: dict, item_ids: list[str]) -> dict:
+        """The pieces on the mannequin right now, bottom first: each one's URL (cut back to what the layers
+        over it don't hide) and its stacking order. Only ready layers are included."""
+        key = self.base_key(body)
+        items = [i for i in (self.store.get_item(x) for x in item_ids) if i and i["tags"] and i["tags"]["category"] in ORDER]
+        ready = [i for i in layering.order(items) if self._state(key, i["id"])["state"] == "ready"]
+        out = []
+        for n, it in enumerate(ready):
+            url = self._state(key, it["id"])["url"]
+            if it["tags"]["category"] in layering.UPPER:
+                over = [o for o in ready[n + 1:] if o["tags"]["category"] in layering.UPPER]
+                if over:
+                    url = self._cut_back(key, it, over)
+            out.append({"item_id": it["id"], "url": url, "order": n + 1})
+        return {"base_key": key, "layers": out}
+
+    def _cut_back(self, key: str, inner: dict, over: list[dict]) -> str:
+        """The inner layer with what the garments over it hide taken out (closet/layering.occlude)."""
+        tag = sha256(json.dumps([OCCLUDE_VERSION, sorted(o["id"] for o in over)]).encode())[:10]
+        name = f"{inner['id']}u{tag}"
+        path = self.root / key / f"{name}.png"
+        if not path.exists():
+            meta = self._meta(key, inner["id"])
+            w, h = meta["size"]
+
+            def alpha(item_id: str) -> np.ndarray:
+                m = self._meta(key, item_id)
+                x, y, bw, bh = m["box"]
+                canvas = np.zeros((h, w), np.uint8)
+                a = np.asarray(Image.open(self.root / key / f"{item_id}.png").convert("RGBA"))[..., 3]
+                canvas[y:y + bh, x:x + bw] = a[: h - y, : w - x]
+                return canvas
+
+            outer = np.maximum.reduce([alpha(o["id"]) for o in over])
+            long_sleeves = any(layering.sleeves(o["tags"]) == "long" for o in over)
+            x, y, bw, bh = meta["box"]
+            cut = layering.occlude(alpha(inner["id"]), outer, long_sleeves)[y:y + bh, x:x + bw]
+            img = np.asarray(Image.open(self.root / key / f"{inner['id']}.png").convert("RGBA")).copy()
+            img[..., 3] = cut[: img.shape[0], : img.shape[1]]
+            Image.fromarray(img, "RGBA").save(path)
+        return f"/api/layers/{key}/{name}.png"
 
     def _start(self, name: str, coro) -> None:
         task = self._tasks.get(name)
