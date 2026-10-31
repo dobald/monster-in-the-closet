@@ -17,7 +17,7 @@ from typing import Any, Literal
 from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, RedirectResponse
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, Field, ValidationError
 
 from closet import config
 from closet.schema import Garment
@@ -25,9 +25,11 @@ from closet.schema import Garment
 from . import settings as settings_mod
 from .cache import Cache
 from .closets import MAIN, SCOPE_KEY, Closet, ClosetMiddleware, Closets, ClosetsFull, current_id
+from .calfeed import FeedError
 from .pipeline import FixtureMissing
 from .planning import today_local
 from .examples import Examples
+from .products import Products
 
 MAX_PHOTOS = 10
 MAX_PHOTO_BYTES = 25 * 1024 * 1024
@@ -41,7 +43,8 @@ def now_iso() -> str:
 
 class ItemOut(BaseModel):
     id: str
-    cutout_url: str
+    cutout_url: str  # the real scan cutout
+    photo_url: str  # what to show: the clean product shot when there is one, else the cutout
     source: str
     scan_id: str
     created_at: str
@@ -106,6 +109,25 @@ class PlanIn(BaseModel):
     fresh: bool = False  # ignore the cached plan for identical inputs
 
 
+class EventIn(BaseModel):
+    title: str = Field(min_length=1, max_length=120)
+    start: str = Field("all day", pattern=r"^(\d\d:\d\d|all day)$")  # "HH:MM" or "all day"
+    end: str | None = Field(None, pattern=r"^\d\d:\d\d$")
+    location: str | None = Field(None, max_length=120)
+    dress_code: str | None = Field(None, max_length=40)
+
+
+class OccasionIn(BaseModel):
+    day: date | None = None  # default: today
+    event: EventIn  # from the calendar, or one the user typed ("job interview")
+    notes: str = ""
+    fresh: bool = False
+
+
+class CalendarLinkIn(BaseModel):
+    url: str = Field(min_length=10, max_length=2000)
+
+
 class WearIn(BaseModel):
     look: int = 0
     day: date | None = None
@@ -127,6 +149,7 @@ async def lifespan(app: FastAPI):
     app.state.settings, app.state.cache = s, cache
     app.state.closets = Closets(s, cache, int(os.environ.get("MONSTER_MAX_CLOSETS", "200")))
     app.state.examples = Examples(s)  # thrift example photos are generic, so every closet shares them
+    app.state.products = Products(s)  # product shots are keyed by item id (a cutout hash), so closets share them too
     yield
 
 
@@ -144,8 +167,9 @@ def C() -> Closet:
 
 
 def _item_out(d: dict) -> ItemOut:
-    return ItemOut(**{k: v for k, v in d.items() if k in ItemOut.model_fields and k != "cutout_url"},
-                   cutout_url=f"/api/cutouts/{d['id']}.png")
+    cutout_url = f"/api/cutouts/{d['id']}.png"
+    return ItemOut(**{k: v for k, v in d.items() if k in ItemOut.model_fields and k not in ("cutout_url", "photo_url")},
+                   cutout_url=cutout_url, photo_url=app.state.products.url(d["id"]) or cutout_url)
 
 
 @app.get("/", include_in_schema=False)
@@ -161,7 +185,7 @@ def health() -> dict:
 
 
 @app.post("/api/scans", response_model=ScanOut)
-async def create_scan(photos: list[UploadFile] = File(..., description="1-10 flat-lay photos, 4-8 items each")) -> ScanOut:
+async def create_scan(photos: list[UploadFile] = File(..., description="1-10 flat-lay photos, up to 8 items each")) -> ScanOut:
     if not 1 <= len(photos) <= MAX_PHOTOS:
         raise HTTPException(422, f"Send 1-{MAX_PHOTOS} photos per scan.")
     batch = []
@@ -178,6 +202,7 @@ async def create_scan(photos: list[UploadFile] = File(..., description="1-10 fla
         raise HTTPException(409, str(e))
     store = C().store
     items = [store.get_item(i) for i in record["item_ids"]]
+    app.state.products.start([i for i in items if i], C().settings.cutout_dir)  # tidy photos in the background
     return ScanOut(**{k: v for k, v in record.items() if k not in ("item_ids", "duplicates")},
                    items=[_item_out(i) for i in items if i], duplicates=_dupes_out(record["duplicates"]))
 
@@ -297,6 +322,26 @@ def delete_item(item_id: str) -> None:
     (C().settings.cutout_dir / f"{item_id}.png").unlink(missing_ok=True)
 
 
+@app.get("/api/products")
+def products_status() -> dict:
+    """How many items have a clean product shot, and how many are being made."""
+    return app.state.products.status(C().store.list_items())
+
+
+@app.post("/api/products")
+async def make_products() -> dict:
+    """Make a product shot for every item without one (live mode; one try per item, in the background)."""
+    return app.state.products.start(C().store.list_items(), C().settings.cutout_dir)
+
+
+@app.get("/api/products/{item_id}.webp")
+def product_file(item_id: str) -> FileResponse:
+    path = app.state.products.dir / f"{item_id}.webp"
+    if not item_id.isalnum() or not path.exists():
+        raise HTTPException(404, "No such product shot.")
+    return FileResponse(path, media_type="image/webp", headers={"Cache-Control": "public, max-age=31536000, immutable"})
+
+
 @app.get("/api/cutouts/{item_id}.png")
 def cutout(item_id: str) -> FileResponse:
     if not item_id.isalnum():
@@ -311,8 +356,9 @@ def _plan_out(record: dict) -> dict:
     """A stored plan with each look's items expanded, ready for the Today screen."""
     store = C().store
     out = {k: record[k] for k in ("id", "day", "created_at", "source", "notes", "weather", "calendar")}
+    out["occasion"] = record.get("occasion")
     out["trace"] = {k: v for k, v in record["trace"].items() if k in
-                    ("provider", "model", "tool_calls", "repairs", "seconds", "tokens_in", "tokens_out", "cached", "failures", "steps", "prebuilt", "taste", "stretch")}
+                    ("provider", "model", "tool_calls", "repairs", "seconds", "tokens_in", "tokens_out", "cached", "failures", "steps", "prebuilt", "taste", "stretch", "scores")}
     plan = record["plan"]
     out["weather_summary"], out["plans_summary"] = plan["weather_summary"], plan["plans_summary"]
     out["looks"] = []
@@ -331,6 +377,35 @@ async def make_plan(body: PlanIn | None = None) -> dict:
     except ValueError as e:
         raise HTTPException(409, str(e))
     C().planning.mark_seen(record)
+    return _plan_out(record)
+
+
+@app.get("/api/occasions")
+async def occasions_coming_up() -> dict:
+    """The next week's events, each read as an occasion (how dressed up, evening, outdoors), with any plan made for it."""
+    planning = C().planning
+    await planning.sync_calendar()
+    return {"calendar": planning.profile()["calendar"], "events": planning.upcoming(today_local())}
+
+
+@app.post("/api/occasions/plan")
+async def plan_occasion(body: OccasionIn) -> dict:
+    """Looks for one occasion: a calendar event or one typed in. Kept apart from the day's plan."""
+    day = body.day or today_local()
+    if not today_local() <= day <= today_local() + timedelta(days=14):
+        raise HTTPException(422, "Plan an occasion from today up to two weeks ahead (that's as far as the forecast goes).")
+    try:
+        record = await C().planning.make_plan(day, body.notes, fresh=body.fresh, event=body.event.model_dump(exclude_none=True))
+    except ValueError as e:
+        raise HTTPException(409, str(e))
+    return _plan_out(record)
+
+
+@app.get("/api/plans/{plan_id}")
+def get_plan(plan_id: str) -> dict:
+    record = C().store.get_plan(plan_id=plan_id)
+    if not record:
+        raise HTTPException(404, "No such plan.")
     return _plan_out(record)
 
 
@@ -611,7 +686,7 @@ class Location(BaseModel):
 
 class ProfileIn(BaseModel):
     location: Location | None = None
-    calendar: Literal["none", "sample", "ics"] | None = None
+    calendar: Literal["none", "sample", "ics", "link"] | None = None
     onboarded: bool | None = None
 
 
@@ -683,6 +758,8 @@ def get_profile() -> dict:
 def put_profile(body: ProfileIn) -> dict:
     if body.calendar == "ics" and not C().planning.calendar_path.exists():
         raise HTTPException(422, "Upload a calendar file first.")
+    if body.calendar == "link" and not C().planning.calendar_link_path.exists():
+        raise HTTPException(422, "Connect a calendar link first.")
     changes = body.model_dump(exclude_none=True)
     if changes.get("onboarded"):
         changes["onboarded_at"] = now_iso()
@@ -697,7 +774,7 @@ async def upload_calendar(file: UploadFile = File(...)) -> dict:
     if len(data) > MAX_ICS_BYTES:
         raise HTTPException(413, "That calendar file is over 2 MB.")
     from closet import tools
-    events = tools._parse_ics(data.decode("utf-8", errors="replace"))
+    events = tools.ics_count(data)
     if not events:
         raise HTTPException(422, "No events found. Export an .ics file from your calendar app (unzip it first if it came as a .zip).")
     path = C().planning.calendar_path
@@ -705,13 +782,25 @@ async def upload_calendar(file: UploadFile = File(...)) -> dict:
     path.write_bytes(data)
     C().planning.update_profile(calendar="ics", calendar_name=file.filename or "calendar.ics")
     today = C().planning.calendar(today_local())
-    return {"events": len(events), "today": today["events"], "profile": _profile_out()}
+    return {"events": events, "today": today["events"], "profile": _profile_out()}
+
+
+@app.post("/api/profile/calendar-link")
+async def connect_calendar_link(body: CalendarLinkIn) -> dict:
+    """Connect a calendar by its private iCal address. It refreshes itself every 15 minutes.
+    The address is kept private: only its host is ever sent back."""
+    try:
+        count = await C().planning.connect_calendar(body.url)
+    except FeedError as e:
+        raise HTTPException(422, str(e))
+    today = C().planning.calendar(today_local())
+    return {"events": count, "today": today["events"], "profile": _profile_out()}
 
 
 @app.delete("/api/profile/calendar")
 def delete_calendar() -> dict:
-    C().planning.calendar_path.unlink(missing_ok=True)
-    C().planning.store.put_setting("profile", {**C().planning.profile(), "calendar": "none", "calendar_name": None})
+    """Disconnect the calendar: the file or link and its copy are deleted."""
+    C().planning.disconnect_calendar()
     return _profile_out()
 
 
@@ -792,6 +881,36 @@ def taste_quiz() -> dict:
 @app.post("/api/taste/quiz")
 def answer_taste_quiz(body: QuizIn) -> dict:
     return {"saved": C().planning.answer_quiz([a.model_dump() for a in body.answers])}
+
+
+class StyleAnswer(BaseModel):
+    picked: str
+    other: str
+
+
+class StyleQuizIn(BaseModel):
+    answers: list[StyleAnswer]
+
+
+@app.get("/api/styles/quiz")
+def style_quiz() -> dict:
+    """Pinterest-style boards, two at a time: which style is more you? The pairs the style model is least sure of."""
+    return {"pairs": C().planning.style_quiz()}
+
+
+@app.post("/api/styles/quiz")
+def answer_style_quiz(body: StyleQuizIn) -> dict:
+    return {"saved": C().planning.answer_style_quiz([a.model_dump() for a in body.answers])}
+
+
+@app.get("/api/style-boards/{style}/{piece}.webp")
+def style_board_piece(style: str, piece: str) -> FileResponse:
+    """One cut-out piece of a style board: the same for everyone, so it caches for a week."""
+    from .planning import STYLE_BOARDS
+    path = STYLE_BOARDS / style / f"{piece}.webp"
+    if not (style.replace("_", "").isalnum() and piece.isalnum()) or not path.exists():
+        raise HTTPException(404, "No such board piece.")
+    return FileResponse(path, media_type="image/webp", headers={"Cache-Control": "public, max-age=604800"})
 
 
 @app.get("/api/style")

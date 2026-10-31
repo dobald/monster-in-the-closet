@@ -127,7 +127,7 @@ class OutfitPlan(BaseModel):
 
     weather_summary: str = Field(description="One short line, e.g. '2–11°, feels like -2° early, dry; overcast evening'.")
     plans_summary: str = Field(description="One line about today's events, or 'No plans today'.")
-    looks: list[Look] = Field(description="Exactly 3 looks, best first. Look 1 should rescue a forgotten item when one fits.")
+    looks: list[Look] = Field(description="5 genuinely different candidate looks; include one that rescues a forgotten item when one fits.")
 
 
 class CheckinLearning(BaseModel):

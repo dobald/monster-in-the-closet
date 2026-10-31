@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 from datetime import date, datetime
 from pathlib import Path
 
@@ -60,46 +59,63 @@ def get_calendar(day: date, path: Path = CALENDAR_PATH) -> dict:
     if not path.exists():
         return {"date": day.isoformat(), "events": [], "note": "no calendar connected"}
     if path.suffix.lower() == ".ics":
-        events = _parse_ics(path.read_text(encoding="utf-8", errors="replace"))
+        today = ics_events(path.read_bytes(), day)
     else:
-        events = json.loads(path.read_text())
-    today = []
-    for e in events:
-        start = e["start"]
-        # JSON sample events may give just "HH:MM" (they recur daily for demos).
-        if len(start) == 5:
-            today.append(e)
-        elif start[:10] == day.isoformat():
-            today.append({**e, "start": start[11:16], "end": (e.get("end") or "")[11:16] or None})
-    today.sort(key=lambda e: e["start"])
+        today = []
+        for e in json.loads(path.read_text()):
+            start = e["start"]
+            # JSON sample events may give just "HH:MM" (they recur daily for demos).
+            if len(start) == 5:
+                today.append(e)
+            elif start[:10] == day.isoformat():
+                today.append({**e, "start": start[11:16], "end": (e.get("end") or "")[11:16] or None})
+    today.sort(key=lambda e: (e["start"] != "all day", e["start"]))
     return {"date": day.isoformat(), "events": [
         {k: e.get(k) for k in ("start", "end", "title", "location", "dress_code") if e.get(k)} for e in today
     ]}
 
 
-def _parse_ics(text: str) -> list[dict]:
-    """Minimal VEVENT reader: DTSTART, DTEND, SUMMARY, LOCATION (enough for a demo calendar)."""
-    text = re.sub(r"\r?\n[ \t]", "", text)  # unfold continuation lines
-    events = []
-    for block in re.findall(r"BEGIN:VEVENT(.*?)END:VEVENT", text, re.S):
-        fields = {}
-        for line in block.strip().splitlines():
-            if ":" in line:
-                key, value = line.split(":", 1)
-                fields[key.split(";")[0].upper()] = value.strip()
+def _calendar(data: bytes):
+    import icalendar
+    try:
+        return icalendar.Calendar.from_ical(data)
+    except ValueError:
+        return None
 
-        def when(v: str | None) -> str | None:
-            if not v:
-                return None
-            v = v.rstrip("Z")
-            fmt = "%Y%m%dT%H%M%S" if "T" in v else "%Y%m%d"
-            return datetime.strptime(v, fmt).isoformat(timespec="minutes")
 
-        start = when(fields.get("DTSTART"))
-        if start:
-            events.append({"start": start, "end": when(fields.get("DTEND")),
-                           "title": fields.get("SUMMARY", "Event"), "location": fields.get("LOCATION")})
-    return events
+def ics_count(data: bytes) -> int:
+    """How many events an .ics file holds (0 if it isn't one)."""
+    cal = _calendar(data)
+    return len(cal.walk("VEVENT")) if cal else 0
+
+
+def ics_events(data: bytes, day: date) -> list[dict]:
+    """One day's events from an .ics file, repeating events included, in this computer's local time.
+
+    Google, Apple and Outlook feeds mix UTC times, TZID times and all-day dates;
+    recurring_ical_events expands RRULEs (a weekly class) and drops EXDATEs.
+    """
+    import recurring_ical_events
+    cal = _calendar(data)
+    if cal is None:
+        return []
+    out = []
+    for ev in recurring_ical_events.of(cal).at(day):
+        start, end = ev.get("DTSTART"), ev.get("DTEND")
+        s, e = (start.dt if start else None), (end.dt if end else None)
+        if s is None:
+            continue
+        timed = isinstance(s, datetime)
+        if timed and s.tzinfo:
+            s = s.astimezone()  # to local time
+            e = e.astimezone() if isinstance(e, datetime) and e.tzinfo else e
+        if timed and s.date() != day:
+            continue  # a late event in another time zone that lands on the next day here
+        out.append({"start": s.strftime("%H:%M") if timed else "all day",
+                    "end": e.strftime("%H:%M") if timed and isinstance(e, datetime) else None,
+                    "title": str(ev.get("SUMMARY", "Event")).strip() or "Event",
+                    "location": str(ev.get("LOCATION", "")).strip() or None})
+    return out
 
 
 TOOL_SPECS = [

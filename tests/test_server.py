@@ -696,6 +696,9 @@ def test_taste(var_dir: Path) -> None:
         assert dna["signals"] == 0 and dna["traits"] == [] and "getting to know you" in dna["narrative"], dna
 
         plan = c.post("/api/plan").json()
+        scores = plan["trace"]["scores"]
+        assert len(scores) == len(plan["looks"]) and all({"rescue", "weather", "colour", "taste", "total"} <= set(x) for x in scores), scores
+        assert any(st["label"] == "score()" for st in plan["trace"]["steps"]), "the score breakdown is in the trace"
         st = plan["trace"]["stretch"]
         assert plan["looks"][st["look"]]["name"] == "Stretch" and 0 <= st["pct"] <= 100, st
         assert len(plan["trace"]["taste"]["fit"]) == len(plan["looks"])
@@ -745,6 +748,245 @@ def test_taste(var_dir: Path) -> None:
         assert all(0 <= p["taste_fit"] <= 100 for p in gaps["pieces"]), gaps["pieces"]
 
 
+def test_scoring() -> None:
+    """The shared outfit score: capped rescue, whole-outfit weather, occasion, colour, and how A and B are picked."""
+    from datetime import date, timedelta
+    from closet import scoring
+
+    today = date(2026, 10, 31)
+
+    def item(iid, cat, warmth=2, form="casual", pattern="solid", days=None):
+        worn = None if days is None else (today - timedelta(days=days)).isoformat()
+        return {"id": iid, "last_worn": worn, "tags": {**GARMENT, "category": cat, "warmth": warmth, "formality": form,
+                                                       "pattern": pattern, "subtype": cat}}
+
+    def read(scheme="all neutral", lights=(0.5, 0.5)):
+        return {"scheme": scheme, "contrast": "medium", "temperature": "mixed",
+                "palette": [{"light": l, "category": "top"} for l in lights]}
+
+    mild = scoring.day_context({"parts": {"afternoon": {"temp_c": [18, 22], "feels_like_low_c": 19, "rain_chance_pct": 0}}}, {"events": []})
+    cold = scoring.day_context({"parts": {"morning": {"temp_c": [1, 4], "feels_like_low_c": 0, "rain_chance_pct": 0}}}, {"events": []})
+    assert mild.target == 1 and not mild.cold and cold.target == 4 and cold.cold
+
+    b = lambda outfit, day=mild, r=None: scoring.breakdown(outfit, r or read(), day, today)  # noqa: E731
+    # Rescue is capped: 400 days idle is worth no more than 90, and a fresh wear is worth nothing.
+    assert b([item("t", "top", days=400), item("b", "bottom", days=1)])["rescue"] == b([item("t", "top", days=90), item("b", "bottom")])["rescue"] == 3.0
+    assert b([item("t", "top", days=3), item("b", "bottom", days=3)])["rescue"] == 0
+    # The weather decides over a forgotten coat on a mild day.
+    coat_day = b([item("t", "top", warmth=1), item("b", "bottom"), item("c", "outerwear", warmth=5, days=400)])
+    tee_day = b([item("t", "top", warmth=1, days=60), item("b", "bottom")])
+    assert tee_day["total"] > coat_day["total"] and coat_day["weather"] < -2, (coat_day, tee_day)
+    # Cold day: a layer beats no layer.
+    assert b([item("t", "top", 3), item("b", "bottom"), item("c", "outerwear", 4)], cold)["weather"] > b([item("t", "top", 3), item("b", "bottom")], cold)["weather"]
+    # A dress code wants something smart.
+    dressy = scoring.day_context({"parts": {}}, {"events": [{"start": "10:00", "title": "Crit", "dress_code": "smart casual"}]})
+    assert b([item("t", "top", form="smart_casual"), item("b", "bottom")], dressy)["occasion"] > b([item("t", "top", form="athleisure"), item("b", "bottom")], dressy)["occasion"]
+    # Colour: one pop beats a clash; two patterns and head-to-toe dark cost a little.
+    assert b([item("t", "top"), item("b", "bottom")], r=read("neutral + accent"))["colour"] > b([item("t", "top"), item("b", "bottom")], r=read("contrasting"))["colour"]
+    assert b([item("t", "top", pattern="striped"), item("b", "bottom", pattern="checked")])["colour"] < b([item("t", "top"), item("b", "bottom")])["colour"]
+    assert b([item("t", "top"), item("b", "bottom")], r=read(lights=(0.1, 0.2)))["colour"] < b([item("t", "top"), item("b", "bottom")])["colour"]
+
+    # A: the best look that rescues something. B: the best look sharing no piece with A.
+    t1, t2, b1, b2 = item("t1", "top", days=200), item("t2", "top", days=2), item("b1", "bottom", days=2), item("b2", "bottom", days=2)
+    scored = [([t, bb], b([t, bb])) for t in (t1, t2) for bb in (b1, b2)]
+    a, second = scoring.pick_two(scored)
+    assert any(i["id"] == "t1" for i in scored[a][0]), "A rescues the forgotten top"
+    assert not {i["id"] for i in scored[a][0]} & {i["id"] for i in scored[second][0]}, "B shares nothing with A"
+    assert "rescue +3.0" in scoring.summary("A", b([t1, b1])), scoring.summary("A", b([t1, b1]))
+
+
+def test_styles(var_dir: Path) -> None:
+    """Style archetypes: the board quiz learns a style mix, reads the closet in the same terms, and finds room to grow."""
+    from closet import styles, taste
+
+    # The model: someone who always picks dark academia, and prefers minimalist over the rest.
+    picks = [("dark_academia", s) for s in styles.IDS if s != "dark_academia"] + [("minimalist", s) for s in ("y2k", "gorpcore", "grunge")]
+    m = styles.fit(picks)
+    mix = m.mix()
+    assert mix[0]["id"] == "dark_academia" and mix[0]["pct"] >= 75 and mix[-1]["pct"] < 50, mix[:3]
+    assert styles.fit([]).mix()[0]["pct"] == 50, "no answers: no opinion"
+    asked = {frozenset(p) for p in picks}
+    nxt = styles.next_pairs(m, asked, 6)
+    assert nxt and not any(frozenset(p) in asked for p in nxt), "never asks a pair twice"
+    assert max(sum(st in p for p in nxt) for st in styles.IDS) <= 2, "no style more than twice a round"
+    for st in styles.STYLES:  # every profile speaks the taste model's language
+        assert set(st.profile) <= set(taste.INDEX) and st.signature and len(st.pieces) >= 6, st.id
+
+    with client_for("fixture", var_dir) as c:
+        c.post("/api/closet/sample")
+        dna = c.get("/api/taste").json()["styles"]
+        assert dna["answers"] == 0 and dna["liked"] == [] and dna["grow"] is None and dna["closet"], dna
+        pairs = c.get("/api/styles/quiz").json()["pairs"]
+        boards = (config.ROOT / "fixtures" / "style_boards" / "boards.json").exists()
+        if boards:
+            assert pairs and all(pr["a"]["style"] != pr["b"]["style"] and pr["a"]["pieces"] for pr in pairs), pairs[:1]
+            piece = pairs[0]["a"]["pieces"][0]
+            assert c.get(piece["cutout_url"]).headers["content-type"] == "image/webp"
+        assert c.get("/api/style-boards/../x.webp").status_code == 404
+
+        answers = [{"picked": "dark_academia", "other": o} for o in ("streetwear", "y2k", "gorpcore", "cyberpunk")]
+        assert c.post("/api/styles/quiz", json={"answers": answers + [{"picked": "nope", "other": "y2k"}]}).json()["saved"] == 4
+        dna = c.get("/api/taste").json()
+        st = dna["styles"]
+        assert st["answers"] == 4 and st["liked"][0]["id"] == "dark_academia", st["liked"]
+        assert st["grow"] and st["grow"]["signature"], st["grow"]
+        assert dna["counts"].get("style") == 4, "board picks teach the outfit model too"
+        if boards:
+            again = c.get("/api/styles/quiz").json()["pairs"]
+            assert not {frozenset((pr["a"]["style"], pr["b"]["style"])) for pr in again} & {frozenset(("dark_academia", a["other"])) for a in answers}
+
+        plan = c.post("/api/plan").json()
+        assert plan["trace"]["stretch"]["towards"] == st["grow"]["name"], plan["trace"]["stretch"]
+
+
+def test_products(var_dir: Path) -> None:
+    """Scans get a clean product shot in the background; a redraw whose colour drifted is thrown away."""
+    import time
+
+    from server import pipeline, products as products_mod
+
+    async def fake_scan_image(client, photo, batch, source):
+        return [scan.ScanItem(source, batch, "0", (0, 0, 1, 1), 0.9, cutout_png((30, 40, 90))),
+                scan.ScanItem(source, batch, "1", (0, 0, 1, 1), 0.9, cutout_png((200, 30, 30)))]
+
+    def fake_tag(img, provider=None):
+        from closet.schema import Garment
+        return Garment.model_validate(GARMENT)
+
+    async def fake_cut(client, photo, noun, open_shape=False):
+        r, g, b = photo.getpixel((photo.width // 2, photo.height // 2))
+        return cutout_png((20, 200, 20) if r > 150 else (r, g, b))  # the red one comes back green: drifted
+
+    calls = {"edit": 0}
+
+    def fake_edit(images, prompt):
+        calls["edit"] += 1
+        assert "Keep it faithful" in prompt and "crewneck sweatshirt" in prompt, prompt
+        return images[0], "ok"
+
+    orig = (pipeline.scan.scan_image, pipeline.models.tag_garment, pipeline.config.async_client_for,
+            products_mod.models._edit, products_mod.products.cut)
+    pipeline.scan.scan_image, pipeline.models.tag_garment = fake_scan_image, fake_tag
+    pipeline.config.async_client_for = lambda provider="meta": None
+    products_mod.models._edit, products_mod.products.cut = fake_edit, fake_cut
+    try:
+        with client_for("live", var_dir) as c:
+            items = c.post("/api/scans", files=[("photos", ("bed.jpg", photo_bytes(3), "image/jpeg"))]).json()["items"]
+            assert all(i["photo_url"] == i["cutout_url"] for i in items), "the scan shows straight away"
+            for _ in range(100):
+                st = c.get("/api/products").json()
+                if not st["running"] and calls["edit"] == 2:
+                    break
+                time.sleep(0.05)
+            assert st == {"done": 1, "running": 0, "waiting": 0, "live": True}, st
+            by_colour = {i["tags"]["primary_color"] + str(n): i for n, i in enumerate(c.get("/api/wardrobe").json())}
+            shown = [i for i in by_colour.values() if i["photo_url"] != i["cutout_url"]]
+            assert len(shown) == 1 and shown[0]["photo_url"].endswith(".webp"), by_colour
+            assert c.get(shown[0]["photo_url"]).headers["content-type"] == "image/webp"
+            drifted = next(i for i in by_colour.values() if i["photo_url"] == i["cutout_url"])
+            note = json.loads((main.app.state.products.dir / f"{drifted['id']}.json").read_text())
+            assert not note["ok"] and "colour drifted" in note["reason"], note
+            c.post("/api/products")
+            assert calls["edit"] == 2, "one try per item"
+    finally:
+        (pipeline.scan.scan_image, pipeline.models.tag_garment, pipeline.config.async_client_for,
+         products_mod.models._edit, products_mod.products.cut) = orig
+
+
+
+def test_occasions(var_dir: Path) -> None:
+    """Events read as occasions, scored on their own, planned apart from the day; linked calendars stay private."""
+    import asyncio
+    from datetime import date as d, timedelta
+
+    from closet import occasions, scoring, tools
+    from server import calfeed, planning as planning_mod
+
+    r = occasions.read({"start": "14:00", "title": "Job interview at Shopify"})
+    assert (r.kind, r.formality, r.evening) == ("interview", 3, False), r
+    r = occasions.read({"start": "19:00", "end": "21:30", "title": "Dinner outside with friends", "location": "Patio restaurant"})
+    assert (r.kind, r.formality, r.evening, r.outdoors) == ("evening_out", 2, True, True), r
+    assert occasions.read({"start": "07:00", "title": "Morning workout"}).kind == "active", "workout isn't work"
+    assert occasions.read({"start": "10:00", "title": "Studio crit", "dress_code": "black tie"}).formality == 4, "a dress code wins"
+
+    # Only the event's hours count: a warm afternoon doesn't help a cold evening dinner.
+    weather = {"parts": {"afternoon": {"temp_c": [18, 22], "feels_like_low_c": 19, "rain_chance_pct": 0},
+                         "evening": {"temp_c": [4, 6], "feels_like_low_c": 1, "rain_chance_pct": 70}}}
+    dinner = scoring.day_context(weather, {"events": []}, {"start": "19:00", "title": "Dinner", "location": "patio"})
+    assert dinner.cold and dinner.rainy and dinner.target == 4 and dinner.formality == 2, dinner
+
+    def piece(cat, form, sub="x"):
+        return {"id": sub, "last_worn": None, "tags": {**GARMENT, "category": cat, "formality": form, "subtype": sub, "warmth": 2}}
+    read = {"palette": [{"light": 0.4, "category": "top"}], "scheme": "all neutral"}
+    interview = scoring.day_context({"parts": {}}, {"events": []}, {"start": "14:00", "title": "Interview"})
+    smart = scoring.breakdown([piece("top", "business", "shirt"), piece("bottom", "smart_casual", "chinos")], read, interview, d.today())
+    sporty = scoring.breakdown([piece("top", "athleisure", "tee"), piece("bottom", "athleisure", "joggers")], read, interview, d.today())
+    assert smart["occasion"] > 0 > sporty["occasion"], (smart, sporty)
+
+    # A weekly class from a real feed: UTC times, an RRULE and a cancelled week.
+    first = d.today() - timedelta(days=7)
+    utc = lambda day, h: day.strftime("%Y%m%d") + f"T{h:02d}0000Z"  # noqa: E731
+    ics = ("BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:a\r\nDTSTART:" + utc(first, 15) + "\r\nDTEND:" + utc(first, 16)
+           + "\r\nRRULE:FREQ=WEEKLY;COUNT=4\r\nEXDATE:" + utc(first + timedelta(days=14), 15)
+           + "\r\nSUMMARY:Design studio\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n").encode()
+    assert tools.ics_count(ics) == 1 and tools.ics_count(b"nope") == 0
+    today = tools.ics_events(ics, d.today())
+    assert [e["title"] for e in today] == ["Design studio"], today
+    from datetime import datetime, timezone
+    local = datetime(first.year, first.month, first.day, 15, tzinfo=timezone.utc).astimezone().strftime("%H:%M")
+    assert today[0]["start"] == local, (today, local)
+    assert tools.ics_events(ics, d.today() + timedelta(days=7)) == [], "the cancelled week is gone"
+    assert [e["title"] for e in tools.ics_events(ics, d.today() + timedelta(days=14))] == ["Design studio"]
+
+    # Calendar links: https only, never a private address, and the link itself never comes back.
+    assert calfeed.normalise("webcal://p01-caldav.icloud.com/published/2/abc") == "https://p01-caldav.icloud.com/published/2/abc"
+    for bad in ("http://calendar.google.com/x.ics", "file:///etc/passwd", "https://localhost/x.ics", "https://127.0.0.1/x.ics"):
+        try:
+            asyncio.run(calfeed.fetch(bad))
+            raise AssertionError(f"fetched {bad}")
+        except calfeed.FeedError:
+            pass
+
+    async def fake_fetch(url):
+        assert url.startswith("https://calendar.google.com/"), url
+        return ics
+    orig = planning_mod.calfeed.fetch
+    planning_mod.calfeed.fetch = fake_fetch
+    try:
+        with client_for("fixture", var_dir) as c:
+            c.post("/api/closet/sample")
+            up = c.get("/api/occasions").json()
+            assert up["calendar"] == "sample" and [e["title"] for e in up["events"]][:2] == ["Studio crit", "Dinner outside with friends"], up
+            assert len(up["events"]) == 4 and up["events"][1]["read"]["label"] == "smart casual · evening · outdoors", up["events"][1]
+
+            day_plan = c.post("/api/plan").json()
+            ev = {k: up["events"][1][k] for k in ("title", "start", "end", "location")}
+            occ = c.post("/api/occasions/plan", json={"event": ev}).json()
+            assert occ["occasion"]["read"]["kind"] == "evening_out" and occ["calendar"]["events"] == [ev], occ["occasion"]
+            assert "Dress me for one occasion" in occ["notes"] and len(occ["looks"]) >= 2, occ["notes"]
+            assert c.get("/api/plan").json()["id"] == day_plan["id"], "an event plan never replaces the day's plan"
+            assert c.get("/api/occasions").json()["events"][1]["plan_id"] == occ["id"]
+            assert c.get(f"/api/plans/{occ['id']}").json()["occasion"]["event"]["title"] == ev["title"]
+
+            typed = c.post("/api/occasions/plan", json={"day": (d.today() + timedelta(days=3)).isoformat(),
+                                                         "event": {"title": "Job interview", "start": "10:00"}}).json()
+            assert typed["day"] == (d.today() + timedelta(days=3)).isoformat() and typed["occasion"]["read"]["formality"] == 3
+            listed = [e for e in c.get("/api/occasions").json()["events"] if e.get("typed")]
+            assert [(e["title"], e["plan_id"]) for e in listed] == [("Job interview", typed["id"])], "typed occasions stay listed"
+            far = c.post("/api/occasions/plan", json={"day": (d.today() + timedelta(days=30)).isoformat(), "event": {"title": "Gala"}})
+            assert far.status_code == 422, far.text
+
+            secret = "https://calendar.google.com/calendar/ical/me%40gmail.com/private-0123456789abcdef/basic.ics"
+            r = c.post("/api/profile/calendar-link", json={"url": secret})
+            assert r.status_code == 200 and r.json()["profile"]["calendar"] == "link", r.text
+            assert r.json()["profile"]["calendar_name"] == "calendar.google.com" and "private-" not in r.text + c.get("/api/profile").text
+            assert [e["title"] for e in c.get("/api/occasions").json()["events"] if not e.get("typed")] == ["Design studio"], "the linked calendar is read"
+            assert c.delete("/api/profile/calendar").json()["calendar"] == "none"
+            assert not main.app.state.closets.get("main").planning.calendar_link_path.exists(), "disconnecting deletes the link"
+    finally:
+        planning_mod.calfeed.fetch = orig
+
+
 def main_() -> None:
     tmp = Path(tempfile.mkdtemp(prefix="monster-test-"))
     run_dir = config.ROOT / "out" / f"_test_seed_{tmp.name}"
@@ -773,8 +1015,12 @@ def main_() -> None:
         test_yesterday_question(tmp / "yesterday")
         test_same_photo_pairs(tmp / "pairs")
         test_taste(tmp / "taste")
+        test_scoring()
+        test_styles(tmp / "styles")
+        test_products(tmp / "products")
+        test_occasions(tmp / "occasions")
         print("OK: fixture mode, seeding, tag fixes, caching, dedupe, planning, wear, check-ins, the agent loop, gap finder, try-on, layered try-on, getting started, finishing touches, colour reads, "
-              "cross-photo duplicates, per-device closets, the sample closet, plans made ahead, the morning wear question and the taste model all behave.")
+              "cross-photo duplicates, per-device closets, the sample closet, plans made ahead, the morning wear question, the taste model, outfit scoring, style archetypes, product shots, occasions and calendar links all behave.")
     finally:
         shutil.rmtree(run_dir, ignore_errors=True)
         shutil.rmtree(tmp, ignore_errors=True)

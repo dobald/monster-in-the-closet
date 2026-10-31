@@ -97,7 +97,7 @@ export function LastWornList({ items, cta, onSaved, onError }: {
         {items.map((it) => (
           <li key={it.id} className="card" style={{ display: "flex", alignItems: "center", gap: 10, padding: 8 }}>
             <span className="halftone" style={{ flex: "none", width: 52, height: 52, border: "var(--line)", borderRadius: 6, padding: 3 }}>
-              <img className="cutout" src={it.cutout_url} alt="" />
+              <img className="cutout" src={it.photo_url} alt="" />
             </span>
             <span style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: 700, lineHeight: 1.25 }}>{itemName(it)}</span>
             <LastWornSelect item={it} value={values[it.id] ?? null} onChange={(d) => setValues({ ...values, [it.id]: d })} />

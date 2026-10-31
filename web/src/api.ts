@@ -22,7 +22,8 @@ export interface Tags {
 
 export interface Item {
   id: string;
-  cutout_url: string;
+  cutout_url: string; // the real scan cutout
+  photo_url: string; // what to show: a clean product shot of the same garment when there is one, else the cutout
   source: string;
   scan_id: string;
   created_at: string;
@@ -34,6 +35,14 @@ export interface Item {
   worn_estimated?: boolean; // last_worn is the user's estimate, not a logged wear
   tags: Tags | null;
   tag_error: string | null;
+}
+
+// Clean product shots of scanned items, made in the background after a scan (live mode).
+export interface ProductStatus {
+  done: number;
+  running: number;
+  waiting: number; // items that will get one next time the server runs live
+  live: boolean;
 }
 
 export interface WeatherPart {
@@ -49,6 +58,24 @@ export interface CalendarEvent {
   title: string;
   location?: string;
   dress_code?: string;
+}
+
+// How the oni reads an event (closet/occasions.py): how dressed up, and when and where it is.
+export interface OccasionRead {
+  kind: string; // formal | funeral | interview | date | evening_out | work | active | gig | class | casual | everyday
+  formality: number; // 0 sporty … 4 formal
+  evening: boolean;
+  outdoors: boolean;
+  advice: string;
+  why: string; // what the read was based on
+  label: string; // e.g. "smart casual · evening · outdoors"
+}
+
+export interface UpcomingEvent extends CalendarEvent {
+  day: string; // YYYY-MM-DD
+  read: OccasionRead;
+  plan_id: string | null; // looks already planned for it
+  typed?: boolean; // typed in, not on the calendar
 }
 
 export interface Look {
@@ -78,11 +105,12 @@ export interface Plan {
     failures?: string[];
     steps?: TraceStep[];
     taste?: { n: number; fit: number[] }; // how well each look suits the learned taste, %
-    stretch?: { look: number; feature: string | null; label: string; pct: number }; // the look one step outside your comfort zone
+    stretch?: { look: number; feature: string | null; label: string; pct: number; towards?: string | null }; // one step outside your comfort zone, maybe towards a style you want to grow into
   };
   weather_summary: string;
   plans_summary: string;
   looks: Look[];
+  occasion: { event: CalendarEvent; read: OccasionRead } | null; // set when planned for one event, not the whole day
 }
 
 export interface Touch {
@@ -236,6 +264,36 @@ export interface StyleDna {
   learning: string[];
   coverage: { worn: number; possible: number; pct: number };
   stretches_worn: number;
+  styles: StylePicture;
+}
+
+// A piece on a collage board: one of your own garments, or a cut-out piece of a style board.
+export interface BoardPiece {
+  id: string;
+  category: string; // top | bottom | outerwear | dress | shoes | bag | hat | eyewear | jewelry | accessory
+  cutout_url: string;
+  name?: string;
+}
+
+export interface StyleBoard {
+  style: string;
+  name: string;
+  pieces: BoardPiece[];
+}
+
+export interface StyleShare {
+  id: string;
+  name: string;
+  ja: string;
+  pct: number;
+  sure?: boolean;
+}
+
+export interface StylePicture {
+  answers: number;
+  liked: StyleShare[]; // from the style boards you picked
+  closet: StyleShare[]; // what the outfits you wear already say
+  grow: { id: string; name: string; ja: string; essence: string; signature: string[]; liked_pct: number; closet_pct: number } | null;
 }
 
 export interface QuizPair {
@@ -333,8 +391,8 @@ export interface Place {
 
 export interface Profile {
   location: Place | null;
-  calendar: "none" | "sample" | "ics";
-  calendar_name: string | null;
+  calendar: "none" | "sample" | "ics" | "link"; // link: a private iCal address that refreshes itself
+  calendar_name: string | null; // the file name, or the link's host (the link itself never comes back)
   onboarded: boolean;
   wardrobe: Partial<Record<Category, number>>;
   can_plan: boolean; // a top + a bottom, or a dress
@@ -399,6 +457,8 @@ export const api = {
   answerYesterday: (look: number | null) => call<{ worn: WearResult | null }>("/api/yesterday", json("POST", { look })),
   checkin: (a: CheckinAnswers) => call<CheckinResult>("/api/checkins", json("POST", a)),
   wardrobe: () => call<Item[]>("/api/wardrobe"),
+  products: () => call<ProductStatus>("/api/products"),
+  makeProducts: () => call<ProductStatus>("/api/products", { method: "POST" }),
   setLastWorn: (items: { id: string; days_ago: number | null }[]) =>
     call<Item[]>("/api/wardrobe/last-worn", json("POST", { items })),
   deleteItem: (id: string) => call<void>(`/api/wardrobe/${id}`, { method: "DELETE" }),
@@ -440,7 +500,13 @@ export const api = {
     form.append("file", file, file.name);
     return call<{ events: number; today: CalendarEvent[]; profile: Profile }>("/api/profile/calendar", { method: "POST", body: form });
   },
+  connectCalendar: (url: string) =>
+    call<{ events: number; today: CalendarEvent[]; profile: Profile }>("/api/profile/calendar-link", json("POST", { url })),
   removeCalendar: () => call<Profile>("/api/profile/calendar", { method: "DELETE" }),
+  occasions: () => call<{ calendar: Profile["calendar"]; events: UpcomingEvent[] }>("/api/occasions"),
+  planOccasion: (event: CalendarEvent, day: string, fresh = false) =>
+    call<Plan>("/api/occasions/plan", json("POST", { event, day, fresh })),
+  plan: (id: string) => call<Plan>(`/api/plans/${id}`),
   geocode: (q: string) => call<Place[]>(`/api/geocode?q=${encodeURIComponent(q)}`),
   addPreference: (text: string, applies_when?: string) =>
     call<{ new: boolean }>("/api/preferences", json("POST", { text, applies_when: applies_when ?? null })),
@@ -449,6 +515,8 @@ export const api = {
   taste: () => call<StyleDna>("/api/taste"),
   correctTaste: (feature: string, value: 1 | -1) => call<void>("/api/taste/correct", json("POST", { feature, value })),
   quiz: () => call<{ pairs: QuizPair[] }>("/api/taste/quiz"),
+  styleQuiz: () => call<{ pairs: { a: StyleBoard; b: StyleBoard }[] }>("/api/styles/quiz"),
+  answerStyleQuiz: (answers: { picked: string; other: string }[]) => call<{ saved: number }>("/api/styles/quiz", json("POST", { answers })),
   answerQuiz: (answers: { picked: string[]; other: string[] }[]) => call<{ saved: number }>("/api/taste/quiz", json("POST", { answers })),
   closet: () => call<{ per_device: boolean; id: string }>("/api/closet"),
   openCloset: (id: string) => call<{ id: string }>("/api/closet/open", json("POST", { id })),

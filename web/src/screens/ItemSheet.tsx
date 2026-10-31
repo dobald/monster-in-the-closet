@@ -3,11 +3,14 @@ import { api, idleDays, itemName, type Item } from "../api";
 import type { AppCtx } from "../App";
 import { bucketFor, LastWornSelect } from "./LastWorn";
 
-// Item detail (wireframe 3a, trimmed): the cutout, its tags and wear history, and a remove action.
+// Item detail (wireframe 3a, trimmed): the picture (product shot or the real scan), its tags and wear history,
+// and a remove action.
 
 export default function ItemSheet({ item, ctx, onClose }: { item: Item; ctx: AppCtx; onClose: () => void }) {
   const [confirming, setConfirming] = useState(false);
   const [current, setCurrent] = useState(item);
+  const tidy = item.photo_url !== item.cutout_url;
+  const [showScan, setShowScan] = useState(false);
   const t = item.tags;
   const idle = idleDays(current);
 
@@ -50,7 +53,16 @@ export default function ItemSheet({ item, ctx, onClose }: { item: Item; ctx: App
         </div>
 
         <div className="halftone" style={{ position: "relative", height: 300, border: "var(--line)", borderRadius: 12, padding: 18 }}>
-          <img className="cutout" src={item.cutout_url} alt={itemName(item)} />
+          <img className="cutout" src={showScan || !tidy ? item.cutout_url : item.photo_url} alt={itemName(item)} />
+          {tidy && (
+            <div role="radiogroup" aria-label="Picture" style={{ position: "absolute", right: 10, bottom: 10, display: "flex", gap: 6 }}>
+              {([[false, "Photo"], [true, "My scan"]] as const).map(([scan, text]) => (
+                <button key={text} type="button" role="radio" aria-checked={showScan === scan} className="chip press" style={{ height: 30, fontSize: 12, padding: "0 10px" }} onClick={() => setShowScan(scan)}>
+                  {text}
+                </button>
+              ))}
+            </div>
+          )}
           {idle >= 30 && (
             <span className="sticker" style={{ position: "absolute", top: 12, left: 10, fontSize: 12 }}>
               {idle}日 UNWORN

@@ -15,9 +15,11 @@ import time
 from datetime import date, datetime
 from typing import Callable
 
-from . import config
+from . import config, scoring
 from .schema import CheckinLearning, Look, OutfitPlan
 from .tools import TOOL_SPECS
+
+CANDIDATES = 5  # looks the agent proposes; closet/scoring.py picks the two to show
 
 PERSONA = (
     "You are the oni from Monster in the Closet: a small, kind closet monster who lives on forgotten clothes. "
@@ -29,8 +31,9 @@ RULES = (
     "Rules: use only wardrobe ids from the list. Each look is one top + one bottom, or one dress, plus "
     "outerwear when it is cold or wet, and shoes/accessories if listed. Dress for the coldest part of the day "
     "the user is out (use feels-like temperatures) and for any dress code. Follow the user's notes and learned "
-    "preferences. Look 1 should rescue a forgotten item when one fits; look 3 can be a safe favourite. "
-    "Make the three looks genuinely different: vary the top and the bottom when the wardrobe allows."
+    "preferences. Return five genuinely different candidate looks (vary the top and the bottom when the wardrobe "
+    "allows): at least one that rescues a forgotten item when one fits, and one safe favourite. The app scores "
+    "them on weather, occasion, colour and the user's learned taste and shows the best two."
 )
 # Spark Open ignores field descriptions in the JSON schema, so the house style is spelled out in the prompt.
 VOICE = (
@@ -76,7 +79,7 @@ def validate_plan(plan: OutfitPlan, items: list[dict]) -> list[str]:
     by_id = {i["id"]: i for i in items}
     errors = []
     if len(plan.looks) < 1:
-        errors.append("Return 3 looks.")
+        errors.append("Return at least one look.")
     for n, look in enumerate(plan.looks, 1):
         unknown = [i for i in look.item_ids if i not in by_id]
         if unknown:
@@ -189,19 +192,19 @@ def plan_with_agent(
             trace["tool_calls"].append(f"{name} (injected)")
             step("tool", f"{name}()", tool_summary(name, result) + " · added for the model, which skipped it")
 
-    final_ask = {"role": "user", "content": "Now return exactly three looks as JSON. Use only wardrobe ids from the list. "
+    final_ask = {"role": "user", "content": "Now return five candidate looks as JSON. Use only wardrobe ids from the list. "
                                             + VOICE}
 
     def parse(msgs: list[dict], label: str) -> OutfitPlan:
         t = time.time()
         plan, out_tokens = _parse_plan(client, model, msgs, count)
-        step("model", label, f"{len(plan.looks)} looks: " + " · ".join(look.name for look in plan.looks[:3]),
+        step("model", label, f"{len(plan.looks)} candidate looks: " + " · ".join(look.name for look in plan.looks[:CANDIDATES]),
              ms=round((time.time() - t) * 1000), tokens=out_tokens)
         return plan
 
     def check(plan: OutfitPlan) -> tuple[list[str], list[str]]:
         errors, variety = validate_plan(plan, items), variety_problems(plan, items)
-        ids = sum(len(look.item_ids) for look in plan.looks[:3])
+        ids = sum(len(look.item_ids) for look in plan.looks[:CANDIDATES])
         step("check", "Checks every look against your real closet",
              " ".join(errors) if errors else f"All {ids} item ids exist · every look has a top + bottom (or a dress)",
              ok=not errors)
@@ -222,7 +225,7 @@ def plan_with_agent(
             plan = fixed
         elif errors:  # a broken plan we couldn't fix; a merely repetitive one is still usable
             raise ValueError("plan still invalid after repair: " + " ".join(fixed_errors))
-    plan.looks = plan.looks[:3]
+    plan.looks = plan.looks[:CANDIDATES]
     by_id = {i["id"]: i for i in items}
     rescued = [by_id[look.rediscovered_id]["tags"]["subtype"] for look in plan.looks
                if look.rediscovered_id and look.rediscovered_id in by_id]
@@ -335,14 +338,11 @@ def distinct_looks(plan: OutfitPlan) -> OutfitPlan:
     return plan
 
 
-TASTE_WEIGHT = 8  # one unit of learned taste is worth about 16 idle days
-
-
 def plan_with_rules(items: list[dict], weather: dict, calendar: dict, notes: str, today: date,
-                    taste_score: Callable[[list[dict]], float] | None = None) -> OutfitPlan:
+                    scorer: Callable[[list[dict]], dict] | None = None) -> OutfitPlan:
     """Deterministic picker: warmth from the coldest feels-like, formality from events, forgotten pieces first.
-    With `taste_score` (the learned taste's utility for an outfit), looks A and B are the best top + bottom
-    pairs by item score plus taste, so what the user has taught it shows up even without a model call."""
+    With `scorer` (closet/scoring.breakdown for this day), looks A and B are chosen from every outfit the
+    closet can make by the same score live plans are ranked with: rescue, weather, occasion, colour, taste."""
     cold = _coldest_feels_like(weather)
     target_warmth = 4 if cold < 3 else 3 if cold < 10 else 2 if cold < 18 else 1
     dressy = any(e.get("dress_code") for e in calendar.get("events", []))
@@ -370,16 +370,11 @@ def plan_with_rules(items: list[dict], weather: dict, calendar: dict, notes: str
     tops, bottoms, dresses, outer = by_cat("top"), by_cat("bottom"), by_cat("dress"), by_cat("outerwear")
 
     combos: list[tuple[dict, ...]] = []
-    if tops and bottoms and taste_score:
-        # A rescues the most forgotten piece and pairs it with what suits you; B is simply your best match today.
-        def suits(tb: tuple[dict, dict]) -> float:
-            return sum(score(i) - forgotten(i) * 0.5 for i in tb) + TASTE_WEIGHT * taste_score(list(tb))
-
-        pairs = [(t, b) for t in tops for b in bottoms]
-        hero = max(tops + bottoms, key=forgotten)
-        first = max((tb for tb in pairs if hero in tb), key=suits)
-        rest = [tb for tb in pairs if tb[0] is not first[0] and tb[1] is not first[1]] or [tb for tb in pairs if tb != first] or [first]
-        combos = [first, max(rest, key=suits)]
+    layer = outer[:1] if cold < scoring.LAYER_BELOW_C else []
+    if scorer:
+        cands = [(t, b) for t in tops for b in bottoms] + [(d,) for d in dresses]
+        scored = [(list(c) + layer, scorer(list(c) + layer)) for c in cands]
+        combos = [cands[n] for n in scoring.pick_two(scored)]
     elif tops and bottoms:
         combos = [(tops[0], bottoms[0]), (tops[min(1, len(tops) - 1)], bottoms[min(1, len(bottoms) - 1)])]
     if tops and bottoms:
@@ -387,13 +382,13 @@ def plan_with_rules(items: list[dict], weather: dict, calendar: dict, notes: str
         fav_top = next((i for i in favourites if i["tags"]["category"] == "top"), tops[-1])
         fav_bottom = next((i for i in favourites if i["tags"]["category"] == "bottom"), bottoms[-1])
         combos.append((fav_top, fav_bottom))
-    if dresses:
+    if dresses and not scorer:
         combos[1:1] = [(d,) for d in (dresses[:1] if combos else dresses[:3])]
 
     looks = []
     for pieces in distinct(combos)[:3]:
         n = len(looks)
-        ids = [p["id"] for p in pieces] + ([outer[0]["id"]] if outer and cold < 12 else [])
+        ids = [p["id"] for p in pieces] + [o["id"] for o in layer]
         rescued = max(pieces, key=forgotten)
         name = ["Rediscovered pick", "Fresh mix", "Safe favourite"][n]
         why = (" with ".join(p["tags"]["subtype"] for p in pieces).capitalize()

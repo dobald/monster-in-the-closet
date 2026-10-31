@@ -5,11 +5,20 @@ import Oni, { MOOD_LABEL } from "../Oni";
 import { getTheme, setTheme, type Theme } from "../theme";
 import { AliveBar } from "./Today";
 import { BasicsChecklist } from "./Touches";
-import { StyleDnaCard } from "./Taste";
+import { QuizSheet, StyleDnaCard } from "./Taste";
 import { DataNote } from "./Onboarding";
 
-// The oni's notebook: its mood, the closet-alive meter, try-on settings, and every preference
-// it has learned from check-ins, each one forgettable.
+// The oni's notebook, in three tabs so nothing important hides under settings:
+//   Your style    what it has learned (Style DNA), with the two quizzes that teach it right at the top
+//   Your closet   closet alive, learned check-in rules, the basics you own but don't scan
+//   Settings      setup, try-on, appearance, Today view, this closet's link
+
+type Tab = "style" | "closet" | "settings";
+const TABS: { id: Tab; en: string; ja: string }[] = [
+  { id: "style", en: "Your style", ja: "好み" },
+  { id: "closet", en: "Your closet", ja: "服" },
+  { id: "settings", en: "Settings", ja: "設定" },
+];
 
 const TRYON_LABEL: Record<TryOnMode, string> = { mannequin: "Mannequin", photo: "My photo", flat: "Flat-lay only" };
 
@@ -18,6 +27,9 @@ export default function Notes({ ctx }: { ctx: AppCtx }) {
   const [tryon, setTryon] = useState<TryOnProfile | null>(null);
   const [theme, setThemeState] = useState<Theme>(getTheme());
   const [setup, setSetup] = useState<Profile | null>(null);
+  const [tab, setTab] = useState<Tab>("style");
+  const [quiz, setQuiz] = useState<"styles" | "outfits" | null>(null);
+  const [learned, setLearned] = useState(0); // bumps after a quiz round so Style DNA re-reads
 
   useEffect(() => {
     api.preferences().then(setPrefs).catch(() => setPrefs([]));
@@ -48,159 +60,196 @@ export default function Notes({ ctx }: { ctx: AppCtx }) {
         </span>
       </header>
 
-      <section className="card" style={{ padding: 14, display: "flex", gap: 14, alignItems: "center" }}>
-        <Oni mood={mood} size={90} />
-        <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 6 }}>
-          <span className="display" style={{ fontSize: 22 }}>
-            {MOOD_LABEL[mood].en.toUpperCase()} <span lang="ja" style={{ fontSize: 14 }}>{MOOD_LABEL[mood].ja}</span>
+      <section className="card" aria-label="The oni" style={{ padding: "10px 12px", display: "flex", gap: 12, alignItems: "center" }}>
+        <Oni mood={mood} size={48} />
+        <span style={{ flex: 1, display: "flex", flexDirection: "column", gap: 2, minWidth: 0 }}>
+          <strong style={{ fontSize: 15 }}>
+            {MOOD_LABEL[mood].en} <span lang="ja" style={{ fontWeight: 400, fontSize: 12 }}>{MOOD_LABEL[mood].ja}</span>
+          </strong>
+          <span className="small muted">
+            {oni?.has_history ? `${oni.closet_alive_pct}% alive` : "No wear history yet"} · {oni?.forgotten ?? 0} forgotten · {oni?.streak_days ?? 0}-day streak
           </span>
-          <span className="small">{MOOD_LABEL[mood].line}</span>
-        </div>
+        </span>
       </section>
 
-      <StyleDnaCard ctx={ctx} />
+      <TeachCard onPlay={setQuiz} />
 
-      <section aria-label="Closet stats" style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 8 }}>
-        <Stat label="ALIVE" value={oni?.has_history ? `${oni.closet_alive_pct}%` : "—"} />
-        <Stat label="FORGOTTEN" value={String(oni?.forgotten ?? 0)} shu={(oni?.forgotten ?? 0) > 0} />
-        <Stat label="STREAK" value={`${oni?.streak_days ?? 0}d`} />
-      </section>
-      <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-        {oni?.has_history && <AliveBar pct={oni.closet_alive_pct} />}
-        <div className="label" style={{ display: "flex", justifyContent: "space-between", fontWeight: 400, fontSize: 9 }}>
-          <span>RESTLESS</span>
-          <span>CALM · 25%</span>
-          <span>PROUD · 60%</span>
-        </div>
-        <span className="small muted">Closet alive = pieces worn in the last 30 days. It sets the oni's mood. No guilt: one rescued piece flips it to Fed.</span>
+      <div role="tablist" aria-label="Notes sections" style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 6 }}>
+        {TABS.map((t) => (
+          <button
+            key={t.id}
+            type="button"
+            role="tab"
+            aria-selected={tab === t.id}
+            className="chip press"
+            onClick={() => setTab(t.id)}
+            style={{ height: 36, fontSize: 13, justifyContent: "center", ...(tab === t.id ? { background: "var(--sumi)", color: "var(--washi)" } : {}) }}
+          >
+            {t.en}
+          </button>
+        ))}
       </div>
 
-      <button
-        type="button"
-        className="card press"
-        onClick={ctx.openSetup}
-        style={{ padding: "10px 12px", display: "flex", alignItems: "center", gap: 10, textAlign: "left", boxShadow: "3px 3px 0 var(--sumi)" }}
-      >
-        <span style={{ flex: 1, display: "flex", flexDirection: "column", gap: 2 }}>
-          <span className="label">YOUR SETUP · <span lang="ja">設定</span></span>
-          <strong style={{ fontSize: 14 }}>{setup?.location?.name ?? "Toronto (default)"}</strong>
-          <span className="small muted">
-            {setup ? { ics: `Calendar: ${setup.calendar_name ?? "your file"}`, sample: "Demo calendar", none: "Just weather, no calendar" }[setup.calendar] : "…"}
-          </span>
-        </span>
-        <span aria-hidden="true" style={{ fontWeight: 700 }}>Edit →</span>
-      </button>
+      <div role="tabpanel" aria-label={TABS.find((t) => t.id === tab)!.en} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+        {tab === "style" && <StyleDnaCard ctx={ctx} version={learned} onPlay={setQuiz} />}
 
-      <button
-        type="button"
-        className="card press"
-        onClick={ctx.openTryOnSetup}
-        style={{ padding: "10px 12px", display: "flex", alignItems: "center", gap: 10, textAlign: "left", boxShadow: "3px 3px 0 var(--sumi)" }}
-      >
-        <span style={{ flex: 1, display: "flex", flexDirection: "column", gap: 2 }}>
-          <span className="label">TRY-ON · <span lang="ja">試着</span></span>
-          <strong style={{ fontSize: 14 }}>{tryon ? TRYON_LABEL[tryon.mode] : "…"}</strong>
-          <span className="small muted">
-            {tryon?.mode === "mannequin" && tryon.body
-              ? `${tryon.body.height_cm} cm · ${tryon.body.build} · ${tryon.body.silhouette}`
-              : tryon?.mode === "photo" ? "Your checked photo. Deletable anytime." : tryon?.ready === false ? "Not set up yet" : "No body, just your real cutouts"}
-          </span>
-        </span>
-        <span aria-hidden="true" style={{ fontWeight: 700 }}>Edit →</span>
-      </button>
-      {tryon?.mode === "mannequin" && tryon.ready && (
-        <button
-          type="button"
-          className="chip press"
-          style={{ alignSelf: "flex-start", height: 32, fontSize: 12 }}
-          onClick={async () => {
-            try {
-              const items = await api.wardrobe();
-              const s = await api.tryonLayers(items.map((i) => i.id), true);
-              const todo = s.layers.filter((l) => l.state === "pending").length;
-              ctx.toast(!s.live ? "Dressing happens in live mode." : todo ? `Dressing ${todo} piece${todo === 1 ? "" : "s"} in the background (about 20s each).` : "Every piece is already dressed.");
-            } catch (e) {
-              ctx.toast((e as Error).message);
+        {tab === "closet" && (
+          <>
+            <section aria-label="Closet stats" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 8 }}>
+                <Stat label="ALIVE" value={oni?.has_history ? `${oni.closet_alive_pct}%` : "—"} />
+                <Stat label="FORGOTTEN" value={String(oni?.forgotten ?? 0)} shu={(oni?.forgotten ?? 0) > 0} />
+                <Stat label="STREAK" value={`${oni?.streak_days ?? 0}d`} />
+              </div>
+              {oni?.has_history && <AliveBar pct={oni.closet_alive_pct} />}
+              <span className="small muted">Closet alive = pieces worn in the last 30 days. It sets the oni's mood. No guilt: one rescued piece flips it to Fed.</span>
+            </section>
+
+            <section aria-label="Learned preferences" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <span className="label">LEARNED FROM YOUR CHECK-INS · <span lang="ja">学び</span></span>
+              {prefs === null && <span className="small">Loading…</span>}
+              {prefs?.length === 0 && <span className="small muted">Nothing yet. Check in tonight and the oni starts learning what works for you.</span>}
+              {prefs?.map((p, i) => (
+                <div key={p.id} className="card" style={{ padding: "10px 12px", display: "flex", gap: 10, alignItems: "flex-start", animation: `rise .3s ease-out ${(0.05 * i).toFixed(2)}s both` }}>
+                  <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 3 }}>
+                    <span style={{ fontSize: 14, fontWeight: 700, lineHeight: 1.4 }}>{p.text}</span>
+                    {p.applies_when && <span className="small muted">When: {p.applies_when.replace(/_/g, " ")}</span>}
+                  </div>
+                  <button type="button" className="chip press" style={{ height: 30, fontSize: 12, padding: "0 10px" }} onClick={() => forget(p)} aria-label={`Forget: ${p.text}`}>
+                    Forget
+                  </button>
+                </div>
+              ))}
+            </section>
+
+            <BasicsChecklist ctx={ctx} />
+          </>
+        )}
+
+        {tab === "settings" && (
+          <>
+            <SettingRow label={<>YOUR SETUP · <span lang="ja">設定</span></>} onClick={ctx.openSetup}
+              title={setup?.location?.name ?? "Toronto (default)"}
+              sub={setup ? { ics: `Calendar: ${setup.calendar_name ?? "your file"}`, link: `Calendar linked: ${setup.calendar_name ?? "live"} · stays up to date`, sample: "Demo calendar", none: "Just weather, no calendar" }[setup.calendar] : "…"} />
+            <SettingRow label={<>TRY-ON · <span lang="ja">試着</span></>} onClick={ctx.openTryOnSetup}
+              title={tryon ? TRYON_LABEL[tryon.mode] : "…"}
+              sub={tryon?.mode === "mannequin" && tryon.body
+                ? `${tryon.body.height_cm} cm · ${tryon.body.build} · ${tryon.body.silhouette}`
+                : tryon?.mode === "photo" ? "Your checked photo. Deletable anytime." : tryon?.ready === false ? "Not set up yet" : "No body, just your real cutouts"} />
+            {tryon?.mode === "mannequin" && tryon.ready && (
+              <button
+                type="button"
+                className="chip press"
+                style={{ alignSelf: "flex-start", height: 32, fontSize: 12, marginTop: -6 }}
+                onClick={async () => {
+                  try {
+                    const items = await api.wardrobe();
+                    const s = await api.tryonLayers(items.map((i) => i.id), true);
+                    const todo = s.layers.filter((l) => l.state === "pending").length;
+                    ctx.toast(!s.live ? "Dressing happens in live mode." : todo ? `Dressing ${todo} piece${todo === 1 ? "" : "s"} in the background (about 20s each).` : "Every piece is already dressed.");
+                  } catch (e) {
+                    ctx.toast((e as Error).message);
+                  }
+                }}
+              >
+                Dress the mannequin with my whole closet
+              </button>
+            )}
+
+            <Choice label={<>APPEARANCE · <span lang="ja">表示</span></>} value={theme}
+              options={[["system", "System"], ["light", "Light"], ["dark", "Dark"]]}
+              onChange={(t) => { setTheme(t as Theme); setThemeState(t as Theme); }} />
+            <Choice label={<>TODAY VIEW · <span lang="ja">画面</span></>} value={ctx.view}
+              options={[["simple", "Simple"], ["full", "Everything"]]}
+              onChange={(v) => ctx.setView(v as "simple" | "full")} />
+
+            <YourCloset ctx={ctx} />
+
+            {ctx.health && (
+              <span className="label muted" style={{ fontWeight: 400, textAlign: "center", marginTop: 6 }}>
+                SERVER · {ctx.health.mode.toUpperCase()} MODE · {ctx.health.garments} GARMENTS · {ctx.health.scans} SCANS
+              </span>
+            )}
+          </>
+        )}
+      </div>
+
+      {quiz && (
+        <QuizSheet
+          kind={quiz}
+          ctx={ctx}
+          onClose={(saved) => {
+            setQuiz(null);
+            if (saved) {
+              ctx.toast(`Learned from ${saved} pick${saved === 1 ? "" : "s"}.`);
+              setLearned((n) => n + 1);
+              setTab("style");
             }
           }}
-        >
-          Dress the mannequin with my whole closet
-        </button>
-      )}
-
-      <section aria-label="Appearance" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-        <span className="label">APPEARANCE · <span lang="ja">表示</span></span>
-        <div role="radiogroup" aria-label="Appearance" style={{ display: "flex", gap: 6 }}>
-          {(["system", "light", "dark"] as Theme[]).map((t) => (
-            <button
-              key={t}
-              type="button"
-              role="radio"
-              aria-checked={theme === t}
-              className="chip press"
-              style={{ height: 30, fontSize: 12, padding: "0 10px" }}
-              onClick={() => {
-                setTheme(t);
-                setThemeState(t);
-              }}
-            >
-              {t === "system" ? "System" : t === "light" ? "Light" : "Dark"}
-            </button>
-          ))}
-        </div>
-      </section>
-
-      <section aria-label="Today view" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-        <span className="label">TODAY VIEW · <span lang="ja">画面</span></span>
-        <div role="radiogroup" aria-label="Today view" style={{ display: "flex", gap: 6 }}>
-          {(["simple", "full"] as const).map((v) => (
-            <button
-              key={v}
-              type="button"
-              role="radio"
-              aria-checked={ctx.view === v}
-              className="chip press"
-              style={{ height: 30, fontSize: 12, padding: "0 10px" }}
-              onClick={() => ctx.setView(v)}
-            >
-              {v === "simple" ? "Simple" : "Everything"}
-            </button>
-          ))}
-        </div>
-      </section>
-
-      <BasicsChecklist ctx={ctx} />
-
-      <section aria-label="Learned preferences" style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 4 }}>
-        <span className="label">LEARNED FROM YOUR CHECK-INS</span>
-        {prefs === null && <span className="small">Loading…</span>}
-        {prefs?.length === 0 && (
-          <div className="card" style={{ padding: 14, borderStyle: "dashed" }}>
-            <span className="small">Nothing yet. Check in tonight and the oni starts learning what works for you.</span>
-          </div>
-        )}
-        {prefs?.map((p, i) => (
-          <div key={p.id} className="card" style={{ padding: "10px 12px", display: "flex", gap: 10, alignItems: "flex-start", animation: `rise .3s ease-out ${(0.05 * i).toFixed(2)}s both` }}>
-            <span className="label" style={{ color: "var(--shu)", paddingTop: 3 }}>{String(i + 1).padStart(2, "0")}</span>
-            <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 3 }}>
-              <span style={{ fontSize: 14, fontWeight: 700, lineHeight: 1.4 }}>{p.text}</span>
-              {p.applies_when && <span className="small muted">When: {p.applies_when.replace(/_/g, " ")}</span>}
-            </div>
-            <button type="button" className="chip press" style={{ height: 30, fontSize: 12, padding: "0 10px" }} onClick={() => forget(p)} aria-label={`Forget: ${p.text}`}>
-              Forget
-            </button>
-          </div>
-        ))}
-      </section>
-
-      <YourCloset ctx={ctx} />
-
-      {ctx.health && (
-        <span className="label muted" style={{ fontWeight: 400, textAlign: "center", marginTop: 10 }}>
-          SERVER · {ctx.health.mode.toUpperCase()} MODE · {ctx.health.garments} GARMENTS · {ctx.health.scans} SCANS
-        </span>
+        />
       )}
     </main>
+  );
+}
+
+// The two ways to teach the oni your taste, at the top of Notes where they're easy to find.
+function TeachCard({ onPlay }: { onPlay: (kind: "styles" | "outfits") => void }) {
+  const tiles: { kind: "styles" | "outfits"; title: string; sub: string; ja: string }[] = [
+    { kind: "styles", title: "Style boards", sub: "Which styles are you? Streetwear, academia, gothic…", ja: "スタイル" },
+    { kind: "outfits", title: "My outfits", sub: "This or that, from your own closet", ja: "私の服" },
+  ];
+  return (
+    <section aria-label="Teach the oni" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      <span className="label">TEACH THE ONI YOUR TASTE · <span lang="ja">教える</span></span>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, paddingRight: 3 }}>
+        {tiles.map((t) => (
+          <button
+            key={t.kind}
+            type="button"
+            className="card press"
+            onClick={() => onPlay(t.kind)}
+            style={{ padding: "12px 12px 10px", display: "flex", flexDirection: "column", gap: 4, textAlign: "left", boxShadow: "3px 3px 0 var(--sumi)", ...(t.kind === "styles" ? { borderColor: "var(--shu)" } : {}) }}
+          >
+            <span lang="ja" className="label muted" style={{ fontSize: 9 }}>{t.ja}</span>
+            <strong style={{ fontSize: 16 }}>{t.title} →</strong>
+            <span className="small muted" style={{ lineHeight: 1.35 }}>{t.sub}</span>
+          </button>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function SettingRow({ label, title, sub, onClick }: { label: React.ReactNode; title: string; sub: string; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      className="card press"
+      onClick={onClick}
+      style={{ padding: "10px 12px", display: "flex", alignItems: "center", gap: 10, textAlign: "left", boxShadow: "3px 3px 0 var(--sumi)" }}
+    >
+      <span style={{ flex: 1, display: "flex", flexDirection: "column", gap: 2 }}>
+        <span className="label">{label}</span>
+        <strong style={{ fontSize: 14 }}>{title}</strong>
+        <span className="small muted">{sub}</span>
+      </span>
+      <span aria-hidden="true" style={{ fontWeight: 700 }}>Edit →</span>
+    </button>
+  );
+}
+
+function Choice({ label, value, options, onChange }: { label: React.ReactNode; value: string; options: [string, string][]; onChange: (v: string) => void }) {
+  return (
+    <section style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
+      <span className="label">{label}</span>
+      <div role="radiogroup" style={{ display: "flex", gap: 6 }}>
+        {options.map(([v, text]) => (
+          <button key={v} type="button" role="radio" aria-checked={value === v} className="chip press" style={{ height: 30, fontSize: 12, padding: "0 10px" }} onClick={() => onChange(v)}>
+            {text}
+          </button>
+        ))}
+      </div>
+    </section>
   );
 }
 
@@ -242,7 +291,7 @@ function YourCloset({ ctx }: { ctx: AppCtx }) {
   };
 
   return (
-    <section aria-label="Your closet" style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 4 }}>
+    <section aria-label="Your closet" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
       <span className="label">YOUR CLOSET · <span lang="ja">クローゼット</span></span>
       <DataNote />
       {closet.per_device && (

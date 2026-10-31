@@ -1,6 +1,6 @@
 """The scan flow: flat-lay photo batches → garment cutouts.
 
-The user lays 4-8 items flat and takes one photo per batch. Day-0 testing showed this
+The user lays up to 8 items flat (one is fine) and takes one photo per batch. Day-0 testing showed this
 beats filming the rail by a wide margin (4/4 clean garments in ~15s for <1¢, versus
 slivers and 27-39 minute waits for video), so photos are the primary capture path.
 

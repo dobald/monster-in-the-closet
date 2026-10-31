@@ -5,7 +5,7 @@
 **Every closet app wants to style you. This one is a monster that starves when your clothes go unworn.**
 
 A closet-first morning agent:
-1. Lay 4–8 items flat and snap one photo per batch.
+1. Lay up to 8 items flat (even just one or two) and snap one photo per batch.
 2. **SAM 3.1** cuts out every garment, and **Muse Spark** catalogs each one.
 3. Each morning, the agent picks an outfit from clothes you already own. It takes the weather and your calendar into account and favours pieces you've forgotten about.
 
@@ -83,6 +83,8 @@ Docs: http://127.0.0.1:8000/docs
 | `GET /api/wardrobe` | Garments; filter with `?category=top`, `?include_hidden=true` |
 | `GET` / `PATCH` / `DELETE /api/wardrobe/{id}` | One item; `PATCH` is "Fix tags", and later rescans keep those fixes |
 | `GET /api/cutouts/{id}.png` | The garment cutout |
+| `GET` / `POST /api/products` | Product shots: how many are done or being made; `POST` starts any missing (live mode) |
+| `GET /api/products/{id}.webp` | One item's clean product shot |
 | `POST /api/dev/seed` | Import a spike run (`{"run": "out/<run>"}`) as wardrobe items and fixtures |
 
 **Spend-safe by design:**
@@ -113,6 +115,13 @@ On the test closet the judge was 13/13 right in about 10s:
 
 Scan responses carry the same `duplicates` block for the items that scan added.
 
+**Product shots: tidy photos of what you scanned (`closet/products.py`).** A scan cutout is the real garment, but crumpled, folded and lit by the room. After a scan, each new item also gets a product shot in the background:
+1. **Redraw:** Muse Image gets the cutout and redraws the same garment laid flat and smoothed on a plain background. The prompt carries the item's tags and measured colour, and asks it to keep every print, text, stripe, pocket and seam.
+2. **Cut out:** SAM 3.1 cuts the redraw out exactly like a scan, so it sits on a card the same way.
+3. **Check:** the shot is only used if its measured colour is within ΔE 20 of the cutout's. A redraw that drifted is thrown away, and the app keeps showing the scan.
+
+Each item gets one try, made once and shared by every closet (item ids hash their cutout). The app shows product shots everywhere: the closet, looks, this-or-that boards and check-ins. The item sheet has a **Photo / My scan** toggle to see the real cutout. The cutout stays the source of truth: tags, colour reads, duplicate checks and try-on all use it.
+
 Tests (no API calls): `python tests/test_server.py` and `python tests/test_offline.py`
 
 ## Morning planner and evening check-in
@@ -122,7 +131,7 @@ The oni's brain runs on **Muse Spark Open via Baseten** as a small tool-using ag
 1. It gets the wardrobe as compact text lines (tags, warmth, last worn), plus preferences learned from past check-ins.
 2. It calls two tools:
    - `get_weather`: Open-Meteo, free, no key. Summarised into morning, afternoon and evening, using feels-like temperatures.
-   - `get_calendar`: a JSON or ICS file.
+   - `get_calendar`: a linked calendar, an uploaded `.ics`, or the demo JSON. Repeating events, time zones and UTC times are read with `icalendar` and `recurring-ical-events`.
 3. It returns three looks in a fixed schema.
 4. Every look is checked against the real wardrobe for invented ids, missing bottoms and repeated items. One repair round fixes problems. The repair round also asks for variety when all three looks share a top, but variety alone never fails a plan.
 5. Fallbacks: if Spark Open fails, the same agent runs on Muse Spark 1.3; if that fails too, a rule-based picker answers. Fixture mode always uses the rules, so the morning screen never breaks and never spends credits.
@@ -135,6 +144,28 @@ The oni's brain runs on **Muse Spark Open via Baseten** as a small tool-using ag
 | `POST /api/checkins` | Evening check-in: `temperature` (cold, just_right, warm), `feeling` (meh, fine, good, iconic), `tags`, `note`. The oni replies and may learn one preference |
 | `GET /api/preferences`, `DELETE /api/preferences/{id}` | What the oni has learned; the user can make it forget |
 | `GET /api/oni` | Mood (restless, calm, proud, fed, sleepy), closet-alive %, forgotten count, streak |
+
+### Dress for an occasion (行事) (`closet/occasions.py`)
+
+The events on Today's ticker are also a list: **Dress for an occasion** shows the next 7 days. Tap one, or type something that isn't on the calendar ("job interview, Monday 10:00"), and the oni plans looks for just that event. Tapping the ticker jumps to the list.
+
+- **Reading the event.** A keyword table turns the title, place, time and dress code into an occasion. Each occasion has:
+  - a rung on the same formality ladder as the garment tags (sporty, casual, smart casual, business, formal)
+  - evening (from 17:00) and outdoors (patio, park, rooftop…)
+  - one line of advice
+
+  A stated dress code beats the title. "Dinner outside with friends, 19:00, Patio restaurant" reads as *smart casual · evening · outdoors*. "Job interview" reads as *business*: "polished and plain… it should not be the story". "Morning workout" reads as sporty, not as work.
+- **Scoring for one event** (`closet/scoring.py`):
+  - **Weather:** only the hours the event covers count. A warm afternoon doesn't excuse a cold, rainy patio dinner.
+  - **Occasion:** the distance between the outfit's mean formality and the event's rung, weighted ×1.5. Sporty pieces cost extra at anything smart casual or above.
+- **The agent.** It gets the occasion as a paragraph ("Dress me for one occasion, not the whole day…"), and its `get_calendar` tool returns just that event. The Stretch look still comes from the taste model, but only from outfits that suit the occasion.
+- **Kept apart.** Event plans are stored with their occasion and never replace the day's pick. The list marks them **PLANNED ✓**, and typed occasions stay on it. Up to 14 days ahead, as far as the forecast goes. "Wear this" is offered on the day; other days say "Saved for Mon 2".
+
+| Endpoint | What it does |
+|---|---|
+| `GET /api/occasions` | The next 7 days' events, each with its occasion read and the plan made for it |
+| `POST /api/occasions/plan` | `{event: {title, start, end?, location?, dress_code?}, day?, fresh?}`: looks for one event |
+| `GET /api/plans/{id}` | A stored plan, event plans included |
 
 **"How the oni decided": the visible agent trace.** Every plan records each step of the run, and Today shows it as a timeline. Live, one run on Muse Spark Open (14.5s, 4.3k tokens in / 3.5k out) looked like this:
 1. **Reads your closet:** 7 garments, 6 with wear history, 2 learned preferences.
@@ -161,6 +192,54 @@ These answers are estimates. They never count as wears, a logged "Wear this" alw
 It's asked once, only about a plan that was actually on screen that day, and never when a wear was already logged. That one tap is also the number that matters for the idea behind the app: did a forgotten piece actually get worn?
 
 **The oni's rescue line.** Above each look, the oni says how long its most forgotten piece has waited, for example "Your dark blue straight-leg jeans have been in here about 400 days. Today they get out." It says "about" when the date is an estimate, and it goes quiet once the look is worn.
+
+### Style boards: which styles are you? (`closet/styles.py`)
+
+The setup's this-or-that shows two **Pinterest-style boards** and asks "which is more you?". The 12 styles were researched in [docs/STYLE_ARCHETYPES.md](docs/STYLE_ARCHETYPES.md): origins, palette, silhouette, fabrics, key pieces, shoes, accessories and how to borrow each from a normal closet, with sources. They are streetwear, dark academia, cyberpunk/techwear, gothic, brutalist, Parisian chic, soft, minimalist, Y2K, gorpcore, old money and grunge.
+
+- **The boards are made with the same Meta models as the scan.**
+  - **Drawing:** Muse Image draws each of the 79 pieces (garments, shoes, bags, hats, eyewear, jewellery) as a product photo.
+  - **Cutting out:** SAM 3.1 cuts each one out like a scanned garment, taking the union of its masks so a pair of shoes stays a pair. Jewellery and bags keep their holes.
+  - **Storage:** the cutouts are committed as small WebP files in `fixtures/style_boards/` (1.3 MB in all), made by `scripts/make_style_boards.py`.
+- **The layout.** The app lays the pieces out like the collages people pin:
+  - a tall left column with the layer draped over the top, above the bottoms
+  - a right-hand column of hat, eyewear, jewellery, bag and shoes
+
+  The same layout is used for this-or-that with your own outfits.
+- **The preference score.**
+  - **The model:** a Bradley–Terry model with a Gaussian prior learns one weight per style from your picks.
+  - **Each style's score:** sigmoid(weight − average), the chance you'd pick its board over an average style's. 50% means no opinion yet.
+  - **Which pair comes next:** the Laplace posterior makes the next pair the one with the most expected information, var(w_a − w_b) × p(1 − p). No pair is ever repeated.
+  - **The reveal:** boards are unlabelled while you choose, and the last pick is named afterwards.
+- **Your closet in the same terms.** Each style also has a profile on the taste model's 20 outfit features. So:
+  - **Style DNA** shows "What your closet says" next to "Styles you're drawn to".
+  - **Every board pick** is also a weak training row for the outfit taste model.
+- **Room to grow.** Of the styles you clearly like (60%+), the one your closet expresses least, with three pieces to start from out of what you own. It:
+  - **leans the Stretch look:** the trace says "leaning towards dark academia", and Today shows "A STEP TOWARDS DARK ACADEMIA"
+  - **goes into the planning and thrift agents' prompts**, so Thrift's second-hand ideas lean that way too
+- **Teach it more.** Style DNA has **Style boards →** and **My outfits →**, for another round of either kind.
+
+| Endpoint | What it does |
+|---|---|
+| `GET` / `POST /api/styles/quiz` | Two boards per pair (the most informative pairs), then `{answers: [{picked, other}]}` with style ids |
+| `GET /api/style-boards/{style}/{piece}.webp` | One cut-out board piece |
+| `GET /api/taste` → `styles` | `liked` (preference scores), `closet` (what your outfits say), `grow` (where to stretch) |
+
+### How a look is scored (`closet/scoring.py`)
+
+One score, used by every way a plan is made. In live mode Muse Spark Open proposes five genuinely different candidates, and this score picks looks A and B from them. The rule picker scores every outfit the closet can make the same way. Each part is on a similar scale, so none can drown the others:
+
+| Part | What counts |
+|---|---|
+| Rescue | Up to +3 for the most forgotten piece, capped at 90 days idle. Nothing for anything worn in the last two weeks. |
+| Weather | Outfit warmth against the day's target from the coldest feels-like, counting a layer. A layer when it's cold, none when it isn't. A penalty for an evening that gets much colder, and for pale trousers on a rainy day. |
+| Occasion | Something smart on a day with a dress code, nothing sporty to it, and not overdressed otherwise. |
+| Colour | The style guide on the measured colour read: neutrals with one pop of colour score best, two clashing colours worst, and head-to-toe dark or two patterns cost a little. |
+| Taste | The learned taste's utility for the outfit, 0 until it has learned anything. |
+
+- **Look A** is the best look that rescues something. **Look B** is the best look sharing no piece with A. **Look C** is the Stretch.
+- The trace shows the breakdown for each look, for example "A 1.3 = weather −0.5 · occasion −0.6 · colour +0.2 · taste +2.1".
+- The old rule picker gave half a point per idle day with no cap, so a 400-day winter coat could beat the weather on a warm day. The tests now check that it can't.
 
 ### A taste that grows (好み)
 
@@ -357,12 +436,19 @@ The first time the app opens, it walks through seven short steps and saves as it
 
 1. **Hello:** the oni introduces itself, with three promises: only what you own, dressed for your day, and second-hand first.
 2. **Where are you?** City search using Open-Meteo geocoding (free, no key), or "Use my location" where the browser allows it. There's an optional "I run cold / warm" choice, which seeds a preference the planner reads from day one.
-3. **What's on?** "Just weather" is the default, since most people don't know what an `.ics` file is. You can also upload an `.ics` export from Google or Apple Calendar, or use the demo calendar. Only event titles, times and places are read, and the file stays in `var/private/`.
-4. **Feed me clothes:** a flat-lay guide (4–8 pieces, no overlaps, print side up), then scanning in batches. **Next** unlocks once there's at least a top and a bottom, or a dress.
+3. **What's on?** "Just weather" is the default. The other options:
+   - **Link my calendar:** paste the private iCal address. In Google it is Settings → Integrate calendar → "Secret address in iCal format"; Apple and Outlook have a published `webcal://` or ICS link. It refreshes every 15 minutes, so new plans show up on their own.
+   - **Upload an `.ics` export.**
+   - **Use the demo calendar.**
+
+   Only event titles, times and places are read. Everything stays in `var/private/`.
+
+   The link is a key to the calendar, so it never goes back to the app; only its host is shown. The server fetches only https addresses that resolve to public IPs, so nothing on localhost, a private network or cloud metadata. Redirects get the same check, with a 3 MB cap and a 12 s timeout (`server/calfeed.py`).
+4. **Feed me clothes:** a flat-lay guide (up to 8 pieces, no overlaps, print side up), then scanning in batches. **Next** unlocks once there's at least a top and a bottom, or a dress.
    - A short note says where the photos go.
    - **No clothes handy? Try a sample closet** loads 9 made-up pieces instead, some unworn for months, so there is something to rescue straight away.
 5. **When did you last wear these?** A rough answer per piece, so forgotten clothes are visible from day one.
-6. **This or that:** a few pairs of outfits from your own closet. Tap the one you'd rather wear, and the taste model starts learning before the first plan. You can skip it.
+6. **Which is more you?** A few pairs of Pinterest-style boards from 12 style worlds. The style model and the outfit taste model start learning before the first plan. You can skip it.
 7. **Your first pick:** a real plan for today, with your weather and calendar. "See my day" finishes setup.
 
 Who wears the try-on is asked the first time you tap **Try it on**, not during setup.
@@ -372,7 +458,8 @@ Notes → **Your setup** reopens the flow from step 2, to change your city or ca
 | Endpoint | What it does |
 |---|---|
 | `GET` / `PUT /api/profile` | Location, calendar choice, onboarded flag; also closet counts and whether a plan is possible |
-| `POST` / `DELETE /api/profile/calendar` | Upload an `.ics` (checked for events, max 2 MB), or remove it |
+| `POST` / `DELETE /api/profile/calendar` | Upload an `.ics` (checked for events, max 2 MB), or disconnect the calendar (file or link) |
+| `POST /api/profile/calendar-link` | `{url}`: connect a calendar by its private iCal / webcal address |
 | `GET /api/geocode?q=` | City search for the weather location |
 | `POST /api/preferences` | A preference the user states directly, stored like learned ones |
 | `GET /api/closet` | Which closet this browser is on (`per_device`, `id`) |
@@ -448,7 +535,7 @@ Offline self-test (no API calls): `python tests/test_offline.py`
   - **Flat-lay only:** your real cutouts, no body at all.
 - **What leaves your device:**
   - **Closet photos → Meta, for SAM segmentation.** The optional video path deletes the upload from Meta's file storage as soon as segmentation finishes.
-  - **Garment cutouts → Meta (Muse Spark 1.3), for tagging.**
+  - **Garment cutouts → Meta (Muse Spark 1.3), for tagging, and → Muse Image, for the clean product shots.**
   - **Text only → Baseten (Muse Spark Open), for the morning plan and check-ins.** This is garment tags, today's weather, calendar event titles and times, and check-in answers. No images.
   - **Renders → Meta's Muse Image.** This includes your photo only if you chose the face version.
 - **Never sent to Meta's "contributor" models,** which may use inputs for training.

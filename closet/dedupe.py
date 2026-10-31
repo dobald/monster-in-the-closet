@@ -42,8 +42,12 @@ JUDGE_INSTRUCTIONS = (
 
 @lru_cache(maxsize=512)
 def _lab(path: str) -> tuple[float, float, float]:
+    return lab(Image.open(path))
+
+
+def lab(img: Image.Image) -> tuple[float, float, float]:
     """Measured colour of a cutout in CIELAB, computed on a thumbnail."""
-    img = Image.open(path)
+    img = img.copy()
     img.thumbnail((256, 256))
     hexc = dominant_color(img)
     rgb = np.array([int(hexc[i:i + 2], 16) for i in (1, 3, 5)]) / 255

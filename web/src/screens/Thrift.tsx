@@ -273,7 +273,7 @@ function GapCard({ piece: p, index, onList, onWatch, onDismiss, example, ctx }: 
               className="halftone"
               style={{ flex: "none", width: 56, height: 56, border: "var(--line)", borderRadius: 6, padding: 3 }}
             >
-              <img className="cutout" src={it.cutout_url} alt="" />
+              <img className="cutout" src={it.photo_url} alt="" />
             </button>
           ))}
         </div>

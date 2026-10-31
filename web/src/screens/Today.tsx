@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api, ApiError, idleDays, itemName, shortName, type Item, type Look, type Plan, type WeatherPart } from "../api";
 import type { AppCtx } from "../App";
 import Oni, { MOOD_LABEL } from "../Oni";
+import { ComingUp } from "./Occasions";
 import TraceSheet from "./Trace";
 import Touches from "./Touches";
 
@@ -214,6 +215,11 @@ export default function Today({ ctx }: { ctx: AppCtx }) {
                   )}
                 </div>
                 <p style={{ margin: 0, fontSize: 14, lineHeight: 1.55 }}>{look.why}</p>
+                {stretch && plan!.trace.stretch?.towards && (
+                  <span className="label" style={{ color: "var(--shu)", fontSize: 10 }}>
+                    A STEP TOWARDS {plan!.trace.stretch.towards.toUpperCase()}
+                  </span>
+                )}
               </>
             )}
 
@@ -282,6 +288,8 @@ export default function Today({ ctx }: { ctx: AppCtx }) {
 
       {plan && load.state === "ready" && open && <PlanSource plan={plan} onOpen={() => setShowTrace(true)} />}
       {showTrace && plan && <TraceSheet plan={plan} onClose={() => setShowTrace(false)} />}
+
+      <ComingUp ctx={ctx} />
 
       <button
         type="button"
@@ -353,7 +361,7 @@ function Yesterday({ ctx }: { ctx: AppCtx }) {
         <span style={{ display: "flex", flex: "none" }}>
           {hero.items.slice(0, 3).map((it, i) => (
             <span key={it.id} className="halftone" style={{ width: 40, height: 40, borderRadius: 8, border: "var(--line)", padding: 2, marginLeft: i ? -10 : 0, background: "var(--paper)" }}>
-              <img className="cutout" src={it.cutout_url} alt="" />
+              <img className="cutout" src={it.photo_url} alt="" />
             </span>
           ))}
         </span>
@@ -462,9 +470,15 @@ function Ticker({ plan, now }: { plan: Plan | null; now: Date }) {
   }
   const text = bits.join(" ★ ") + " ★ ";
   return (
-    <div
-      aria-label={"Today at a glance: " + bits.join(", ")}
+    <button
+      type="button"
+      onClick={() => document.getElementById("occasions")?.scrollIntoView({ behavior: "smooth", block: "start" })}
+      aria-label={"Today at a glance: " + bits.join(", ") + ". Dress for an occasion."}
       style={{
+        border: 0,
+        padding: 0,
+        width: "calc(100% + 32px)",
+        cursor: "pointer",
         margin: "0 -16px",
         height: 30,
         background: "var(--sumi)",
@@ -478,7 +492,7 @@ function Ticker({ plan, now }: { plan: Plan | null; now: Date }) {
         <span style={{ paddingRight: 24 }}>{text}</span>
         <span style={{ paddingRight: 24 }}>{text}</span>
       </div>
-    </div>
+    </button>
   );
 }
 
@@ -530,7 +544,7 @@ const FRAMES: Record<number, { l: number; t: number; w: number; h: number; r: nu
 
 // The unworn sticker goes by the item's own idle days, not the plan's rediscovered_id: the rule
 // picker treats never-worn items as forgotten, which would flag clothes scanned this morning.
-function Collage({ items, onOpen, onTryOn }: { items: Item[]; onOpen: (i: Item) => void; onTryOn: () => void }) {
+export function Collage({ items, onOpen, onTryOn }: { items: Item[]; onOpen: (i: Item) => void; onTryOn: () => void }) {
   const frames = FRAMES[Math.min(items.length, 4)] ?? FRAMES[4];
   return (
     <div className="halftone" style={{ position: "relative", height: 236, borderRadius: 8, overflow: "hidden", border: "var(--line)" }}>
@@ -572,7 +586,7 @@ function Collage({ items, onOpen, onTryOn }: { items: Item[]; onOpen: (i: Item) 
               } as React.CSSProperties
             }
           >
-            <img className="cutout" src={it.cutout_url} alt="" style={{ flex: 1, minHeight: 0 }} />
+            <img className="cutout" src={it.photo_url} alt="" style={{ flex: 1, minHeight: 0 }} />
             <span
               style={{
                 marginTop: -6,
@@ -669,7 +683,7 @@ function EmptyCloset({ msg, ctx }: { msg: string; ctx: AppCtx }) {
       <Oni mood="restless" size={80} />
       <h2 className="display" style={{ fontSize: 26 }}>FEED ME CLOTHES</h2>
       <p style={{ margin: 0, fontSize: 14, lineHeight: 1.5 }}>
-        {empty ? "Your closet is empty. Lay 4–8 things flat, take a photo, and I'll pick an outfit from what you own." : msg}
+        {empty ? "Your closet is empty. Lay a few things flat (up to 8), take a photo, and I'll pick an outfit from what you own." : msg}
       </p>
       <button type="button" className="btn shu press block" onClick={() => ctx.go("scan")}>
         Scan my clothes →

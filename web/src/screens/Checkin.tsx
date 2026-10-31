@@ -82,7 +82,7 @@ export default function Checkin({ plan, lookIndex, ctx, onDone }: { plan: Plan |
                 title={shortName(it)}
                 style={{ width: 48, height: 48, border: "1.5px solid var(--washi)", borderRadius: 6, background: "var(--sumi-2)", padding: 3 }}
               >
-                <img src={it.cutout_url} alt={shortName(it)} style={{ width: "100%", height: "100%", objectFit: "contain" }} />
+                <img src={it.photo_url} alt={shortName(it)} style={{ width: "100%", height: "100%", objectFit: "contain" }} />
               </span>
             ))}
             <span className="label" style={{ fontWeight: 400, marginLeft: 4, lineHeight: 1.4 }}>

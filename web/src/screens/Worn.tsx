@@ -92,7 +92,7 @@ export default function Worn({ result, onDone, onCheckin }: { result: WearResult
                 flexDirection: "column",
               }}
             >
-              <img className="cutout" src={hero.cutout_url} alt="" style={{ flex: 1, minHeight: 0, padding: 4 }} />
+              <img className="cutout" src={hero.photo_url} alt="" style={{ flex: 1, minHeight: 0, padding: 4 }} />
               <span style={{ background: "var(--washi)", borderTop: "var(--line)", padding: "2px 5px", fontSize: 10, fontWeight: 700 }}>{shortName(hero)}</span>
             </span>
           )}

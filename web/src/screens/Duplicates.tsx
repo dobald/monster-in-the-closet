@@ -82,7 +82,7 @@ function Thumb({ item, r }: { item: Item; r: number }) {
   return (
     <span style={{ display: "flex", flexDirection: "column", gap: 4 }}>
       <span className="halftone" style={{ display: "block", aspectRatio: "1", border: "var(--line)", borderRadius: 8, padding: 6, transform: `rotate(${r}deg)` }}>
-        <img className="cutout" src={item.cutout_url} alt={itemName(item)} />
+        <img className="cutout" src={item.photo_url} alt={itemName(item)} />
       </span>
       <span style={{ fontSize: 11, fontWeight: 700, lineHeight: 1.2 }}>{itemName(item)}</span>
       <span className="label" style={{ fontWeight: 400, fontSize: 9 }}>
@@ -103,7 +103,7 @@ export function MergedNote({ dupes }: { dupes: Duplicates }) {
             className="halftone"
             style={{ width: 40, height: 40, border: "var(--line)", borderRadius: 6, padding: 3, marginLeft: i ? -12 : 0, transform: `rotate(${(i - 1) * 6}deg)` }}
           >
-            <img className="cutout" src={m.kept.cutout_url} alt="" />
+            <img className="cutout" src={m.kept.photo_url} alt="" />
           </span>
         ))}
       </div>

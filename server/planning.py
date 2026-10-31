@@ -16,14 +16,15 @@ from datetime import date, datetime, timedelta, timezone
 
 import numpy as np
 
-from closet import colour, config, gaps, planner, styling, taste, tools
+from closet import colour, config, gaps, occasions, planner, scoring, styles, styling, taste, tools
 from closet.schema import CheckinLearning, Look, OutfitPlan
 
+from . import calfeed
 from .cache import Cache, sha256
 from .settings import Settings
 from .store import Store, now
 
-PLAN_VERSION = "plan1"
+PLAN_VERSION = "plan2"  # plan2: five candidates, ranked by closet/scoring.py
 GAP_VERSION = "gaps2"
 TOUCH_VERSION = "touch3"
 COLD_C = 8  # feels-like at or below this is "cold" for scarves, beanies and long-sleeve layers
@@ -68,6 +69,63 @@ class Planning:
     def calendar_path(self):
         return self.settings.var_dir / "private" / "calendar.ics"
 
+    @property
+    def calendar_link_path(self):
+        """The calendar's private iCal address: a password to it, so it never leaves this folder."""
+        return self.settings.var_dir / "private" / "calendar_link.txt"
+
+    async def connect_calendar(self, url: str) -> int:
+        """Check a calendar link, keep a first copy and remember it. Returns the number of events."""
+        from urllib.parse import urlsplit
+        data = await calfeed.fetch(url)
+        count = tools.ics_count(data)
+        if not count:
+            raise calfeed.FeedError("That link has no events. Check it's the iCal (.ics) address, not the web page.")
+        self.calendar_path.parent.mkdir(parents=True, exist_ok=True)
+        self.calendar_path.write_bytes(data)
+        self.calendar_link_path.write_text(calfeed.normalise(url), encoding="utf-8")
+        self.update_profile(calendar="link", calendar_name=urlsplit(calfeed.normalise(url)).hostname)
+        return count
+
+    async def sync_calendar(self) -> None:
+        """Refresh a linked calendar if its copy is over 15 minutes old. A failed refresh keeps the last copy."""
+        if self.profile()["calendar"] != "link" or not self.calendar_link_path.exists():
+            return
+        if self.calendar_path.exists() and datetime.now().timestamp() - self.calendar_path.stat().st_mtime < calfeed.REFRESH_S:
+            return
+        try:
+            data = await calfeed.fetch(self.calendar_link_path.read_text(encoding="utf-8"))
+            if tools.ics_count(data):
+                self.calendar_path.write_bytes(data)
+        except calfeed.FeedError:
+            pass
+
+    def disconnect_calendar(self) -> None:
+        self.calendar_path.unlink(missing_ok=True)
+        self.calendar_link_path.unlink(missing_ok=True)
+        self.store.put_setting("profile", {**self.profile(), "calendar": "none", "calendar_name": None})
+
+    def upcoming(self, today: date, days: int = 7) -> list[dict]:
+        """Events coming up, each read as an occasion, with the plan already made for it (if any).
+        The demo calendar repeats every day, so only today's and tomorrow's demo events are listed."""
+        span = [today + timedelta(days=n) for n in range(days)]
+        cal_days = span[:2] if self.profile()["calendar"] == "sample" else span
+        made = {}
+        for rec in self.store.occasion_plans([d.isoformat() for d in span]):
+            ev = rec["occasion"]["event"]
+            made.setdefault((rec["day"], ev.get("title"), ev.get("start")), rec["id"])
+        out = []
+        for d in cal_days:
+            for e in self.calendar(d)["events"]:
+                out.append({"day": d.isoformat(), **e, "read": occasions.read(e).to_dict(),
+                            "plan_id": made.pop((d.isoformat(), e.get("title"), e.get("start")), None)})
+        # Occasions typed in rather than on the calendar ("job interview Monday") stay on the list too.
+        for rec in self.store.occasion_plans([d.isoformat() for d in span]):
+            ev = rec["occasion"]["event"]
+            if made.get((rec["day"], ev.get("title"), ev.get("start"))) == rec["id"]:
+                out.append({"day": rec["day"], **ev, "read": rec["occasion"]["read"], "plan_id": rec["id"], "typed": True})
+        return sorted(out, key=lambda e: (e["day"], e.get("start") != "all day", e.get("start") or ""))
+
     def profile(self) -> dict:
         # Before getting started, keep the old behaviour: .env location and the sample calendar.
         return {"location": None, "calendar": "sample", "calendar_name": None, "onboarded": False,
@@ -84,7 +142,7 @@ class Planning:
 
     def calendar(self, day: date) -> dict:
         kind = self.profile()["calendar"]
-        if kind == "ics" and self.calendar_path.exists():
+        if kind in ("ics", "link") and self.calendar_path.exists():
             return tools.get_calendar(day, self.calendar_path)
         if kind == "sample":
             return tools.get_calendar(day)
@@ -125,7 +183,8 @@ class Planning:
             self._building.discard(key)
 
     async def make_plan(self, day: date, notes: str = "", lat: float | None = None, lon: float | None = None,
-                        fresh: bool = False, prebuilt: bool = False) -> dict:
+                        fresh: bool = False, prebuilt: bool = False, event: dict | None = None) -> dict:
+        """The day's looks, or with `event` looks for that one occasion (closet/occasions.py)."""
         home = self.location()
         lat = home[0] if lat is None else lat
         lon = home[1] if lon is None else lon
@@ -134,9 +193,19 @@ class Planning:
         if gap:
             raise ValueError(gap)
         model = self.taste_model()
-        prefs = self.store.list_preferences() + taste.prompt_lines(model)  # what it has learned rides along as preferences
+        picture = self.style_picture(items)
+        prefs = (self.store.list_preferences() + taste.prompt_lines(model)  # what it has learned rides along as preferences
+                 + styles.prompt_lines(picture["liked"], picture["grow"], picture["answers"]))
         weather = self.weather(day, lat, lon)
-        calendar = self.calendar(day)
+        read = None
+        if event:
+            read = occasions.read(event)
+            calendar = {"date": day.isoformat(), "events": [event]}  # the agent's get_calendar sees just this event
+            notes = " ".join(filter(None, [read.prompt_line(event), notes.strip()]))
+        else:
+            await self.sync_calendar()
+            calendar = self.calendar(day)
+        scorer = self._scorer(weather, calendar, day, model, event)
 
         snapshot = [(i["id"], i["tags"], i["last_worn"], i["wear_count"]) for i in sorted(items, key=lambda i: i["id"])]
         key = sha256(json.dumps([PLAN_VERSION, day.isoformat(), notes.strip().lower(), snapshot,
@@ -147,22 +216,23 @@ class Planning:
         if cached:
             plan, trace, source = OutfitPlan.model_validate(cached["plan"]), {**cached["trace"], "cached": True}, "cache"
         elif self.settings.live:
-            plan, trace, source = await self._live_plan(items, prefs, day, notes, weather, calendar, self._taste_score(model))
+            plan, trace, source = await self._live_plan(items, prefs, day, notes, weather, calendar, scorer)
             self.cache.put("plans", key, {"plan": plan.model_dump(), "trace": trace})
         else:
-            plan = planner.plan_with_rules(items, weather, calendar, notes, day, self._taste_score(model))
+            plan = planner.plan_with_rules(items, weather, calendar, notes, day, scorer)
             trace, source = {"provider": "rules", "reason": "fixture mode",
                              "steps": planner.rule_steps(items, prefs, weather, calendar, notes, plan, "Fixture mode: no model calls")}, "rules"
 
-        plan = planner.distinct_looks(plan)
-        plan, trace = self._with_taste(plan, dict(trace), items, day, weather, model)
+        plan = self._rank(planner.distinct_looks(plan), scorer)
+        plan, trace = self._with_taste(plan, dict(trace), items, day, weather, model, scorer, picture["grow"], bool(event))
         trace = {**trace, "basis": self.basis(day), **({"prebuilt": True} if prebuilt else {})}
         record = {"id": uuid.uuid4().hex[:12], "day": day.isoformat(), "created_at": now(), "source": source,
-                  "plan": plan.model_dump(), "trace": trace, "weather": weather, "calendar": calendar, "notes": notes}
+                  "plan": plan.model_dump(), "trace": trace, "weather": weather, "calendar": calendar, "notes": notes,
+                  "occasion": {"event": event, "read": read.to_dict()} if read else None}
         self.store.add_plan(record)
         return record
 
-    async def _live_plan(self, items, prefs, day, notes, weather, calendar, taste_score=None) -> tuple[OutfitPlan, dict, str]:
+    async def _live_plan(self, items, prefs, day, notes, weather, calendar, scorer=None) -> tuple[OutfitPlan, dict, str]:
         tool_impls = {"get_weather": lambda: weather, "get_calendar": lambda: calendar}
         failures = []
         providers = [config.PLAN_PROVIDER] + [p for p in ("meta",) if p != config.PLAN_PROVIDER]
@@ -173,7 +243,7 @@ class Planning:
                 return plan, {**trace, "failures": failures}, "agent"
             except Exception as e:
                 failures.append(f"{provider}: {type(e).__name__}: {e}"[:300])
-        plan = planner.plan_with_rules(items, weather, calendar, notes, day, taste_score)
+        plan = planner.plan_with_rules(items, weather, calendar, notes, day, scorer)
         steps = planner.rule_steps(items, prefs, weather, calendar, notes, plan, "The models didn't answer, so the rules stepped in")
         return plan, {"provider": "rules", "failures": failures, "steps": steps}, "rules"
 
@@ -312,7 +382,9 @@ class Planning:
         if gap:
             raise ValueError(gap)
         model = self.taste_model()
-        prefs = self.store.list_preferences() + taste.prompt_lines(model)
+        picture = self.style_picture(items)
+        prefs = (self.store.list_preferences() + taste.prompt_lines(model)
+                 + styles.prompt_lines(picture["liked"], picture["grow"], picture["answers"]))
         thrift = self.store.list_thrift()
         watching = [t["name"] for t in thrift if t["status"] == "watching"]
         dismissed = [t["name"] for t in thrift if t["status"] == "dismissed"]
@@ -384,26 +456,46 @@ class Planning:
                 rows.append(taste.Row(x, 0.2, 0.3, True, "not_worn"))
             elif e["kind"] == "correct" and e["feature"] in taste.INDEX:
                 rows.append(taste.correction_row(e["feature"], e["value"]))
+            elif e["kind"] == "style" and e["a"][0] in styles.BY_ID and e["b"][0] in styles.BY_ID:
+                # A board pick is a weak outfit-level vote too: this style's features over that one's.
+                rows.append(taste.Row(styles.profile(e["a"][0]) - styles.profile(e["b"][0]), 1.0, 0.5, False, "style"))
         return rows, choices
 
     def taste_model(self) -> taste.Model:
         return taste.fit(self.taste_data()[0])
 
-    def _taste_score(self, model: taste.Model):
-        """The learned taste as an outfit scorer for the rule picker, once there is something learned."""
-        return (lambda outfit: model.utility(self._vec(outfit))) if model.n else None
+    def _scorer(self, weather: dict, calendar: dict, day: date, model: taste.Model, event: dict | None = None):
+        """closet/scoring.breakdown for this day (or one event): rescue, weather, occasion, colour and the learned taste."""
+        ctx = scoring.day_context(weather, calendar, event)
+
+        def score(outfit: list[dict]) -> dict:
+            read = colour.read(outfit, self.settings.cutout_dir)
+            return scoring.breakdown(outfit, read, ctx, day, model.utility(taste.vector(outfit, read)) if model.n else 0.0)
+        return score
+
+    def _rank(self, plan: OutfitPlan, scorer) -> OutfitPlan:
+        """Looks A and B by the shared score, whoever proposed them; the rest follow, best first."""
+        by_id = {i["id"]: i for i in self._garments()}
+        outfits = [[by_id[i] for i in lk.item_ids if i in by_id] for lk in plan.looks]
+        scored = [(o, scorer(o)) for o in outfits]
+        top = scoring.pick_two(scored)
+        rest = sorted((n for n in range(len(plan.looks)) if n not in top), key=lambda n: -scored[n][1]["total"])
+        plan.looks = [plan.looks[n] for n in top + rest]
+        return plan
 
     def _candidates(self, items: list[dict], cold: bool) -> list[tuple[list[dict], np.ndarray]]:
         return [(o, self._vec(o)) for o in taste.outfits(items, cold)]
 
     def _with_taste(self, plan: OutfitPlan, trace: dict, items: list[dict], day: date, weather: dict,
-                    model: taste.Model) -> tuple[OutfitPlan, dict]:
+                    model: taste.Model, scorer, grow: dict | None = None, occasion: bool = False) -> tuple[OutfitPlan, dict]:
         """Score each look against the learned taste, and make look C a Stretch: one step outside the
         comfort zone, picked by Thompson sampling. Seeded by the day and closet, so a plan replays the same."""
         parts = (weather.get("parts") or {}).values()
         cold = min((p["feels_like_low_c"] for p in parts), default=15) <= COLD_C
         by_id = {i["id"]: i for i in items}
         cands = self._candidates(items, cold)
+        if occasion:  # planning for one event: a stretch still has to suit it
+            cands = [c for c in cands if scorer(c[0])["occasion"] >= 0]
         base = float(np.mean([model.utility(x) for _, x in cands])) if cands else 0.0
 
         # The comfort zone: outfits actually worn, plus today's own picks A and B.
@@ -413,7 +505,8 @@ class Planning:
         pairs_worn = {frozenset(p) for o in worn for p in itertools.combinations({i["id"] for i in o}, 2)}
         taken = [{i for i in lk.item_ids if by_id.get(i, {}).get("tags", {}).get("category") != "outerwear"} for lk in plan.looks[:2]]
         rng = np.random.default_rng(int(sha256(f"stretch:{day}:{self.basis(day)}".encode())[:12], 16))
-        stretch = taste.pick_stretch(model, cands, exposure, pairs_worn, taken, rng) if cands else None
+        lean = styles.profile(grow["id"]) if grow else None
+        stretch = taste.pick_stretch(model, cands, exposure, pairs_worn, taken, rng, lean) if cands else None
 
         steps = list(trace.get("steps") or [])
         done = steps.pop() if steps and steps[-1].get("kind") == "done" else None
@@ -432,11 +525,17 @@ class Planning:
             index = min(2, len(plan.looks))
             plan.looks = plan.looks[:index] + [look]
             trace["stretch"] = {"look": index, "feature": stretch["feature"], "pair": stretch["pair"], "pct": pct,
-                                "label": taste.STRETCH_TEXT[stretch["feature"]] if stretch["feature"] else "a new pairing"}
+                                "label": taste.STRETCH_TEXT[stretch["feature"]] if stretch["feature"] else "a new pairing",
+                                "towards": grow["name"] if grow else None}
             steps.append({"kind": "tool", "label": "stretch()", "ok": True,
-                          "detail": f"Thompson-sampled from {len(cands)} outfits you could wear: {new[:-1]} ({pct}% fit)"})
+                          "detail": f"Thompson-sampled from {len(cands)} outfits you could wear: {new[:-1]} ({pct}% fit)"
+                          + (f", leaning towards {grow['name'].lower()}" if grow else "")})
         fits = [taste.fit_pct(model, self._vec([by_id[i] for i in lk.item_ids if i in by_id]), base) for lk in plan.looks]
         trace["taste"] = {"n": model.n, "fit": fits}
+        scores = [scorer([by_id[i] for i in lk.item_ids if i in by_id]) for lk in plan.looks]
+        trace["scores"] = scores
+        steps.append({"kind": "tool", "label": "score()", "ok": True,
+                      "detail": " · ".join(scoring.summary("ABC"[n], b) for n, b in enumerate(scores[:3]))})
         steps.append({"kind": "tool", "label": "taste_model()", "ok": True,
                       "detail": (f"Learned from {model.n} signals · fit " + " · ".join(f"{f}%" for f in fits)) if model.n
                       else "No signals yet: the warm-up and your first wears teach it"})
@@ -494,7 +593,42 @@ class Planning:
             "coverage": {"worn": len(worn), "possible": len(possible),
                          "pct": round(100 * len(worn) / len(possible)) if possible else 0},
             "stretches_worn": tried,
+            "styles": self.style_picture(items),
         }
+
+    # -- style archetypes (closet/styles.py, docs/STYLE_ARCHETYPES.md)
+
+    def style_model(self) -> styles.StyleModel:
+        return styles.fit([(e["a"][0], e["b"][0]) for e in self.store.list_taste_events() if e["kind"] == "style"])
+
+    def style_picture(self, items: list[dict] | None = None) -> dict:
+        """Styles you're drawn to (board picks), what your closet says (worn outfits against each style's
+        profile), and the style to grow into: the one you like most and wear least."""
+        items = self._garments() if items is None else items
+        model = self.style_model()
+        liked = model.mix() if model.answers else []
+        by_id = {i["id"]: i for i in items}
+        worn = [[by_id[i] for i in ids if i in by_id] for ids in self.store.outfits_worn().values()]
+        outfits = [o for o in worn if o] or taste.outfits(items, cold=False)
+        closet = styles.closet_mix([self._vec(o) for o in outfits[:60]])
+        return {"answers": model.answers, "liked": liked[:4], "closet": closet[:4],
+                "grow": styles.grow(liked, closet, model.answers)}
+
+    def style_quiz(self, k: int = 6) -> list[dict]:
+        """Pairs of style boards, the ones the style model is least sure about, never one already asked."""
+        asked = {frozenset((e["a"][0], e["b"][0])) for e in self.store.list_taste_events() if e["kind"] == "style"}
+        boards = {k: v for k, v in styles_boards().items() if len(v) >= 4}  # a board needs enough pieces to read as a style
+        pairs = styles.next_pairs(self.style_model(), asked | {frozenset((a, b)) for a in styles.IDS for b in styles.IDS
+                                                               if a not in boards or b not in boards}, k)
+        return [{"a": board_out(a, boards[a]), "b": board_out(b, boards[b])} for a, b in pairs]
+
+    def answer_style_quiz(self, answers: list[dict]) -> int:
+        n = 0
+        for ans in answers[:20]:
+            if ans["picked"] in styles.BY_ID and ans["other"] in styles.BY_ID and ans["picked"] != ans["other"]:
+                self.store.add_taste_event("style", a=[ans["picked"]], b=[ans["other"]])
+                n += 1
+        return n
 
     def correct_taste(self, feature: str, value: float) -> None:
         if feature not in taste.INDEX:
@@ -644,6 +778,20 @@ class Planning:
             self.cache.put("touches", key, out)
         self._given.setdefault(plan_id, {})[look_index] = touches
         return {**out, "touches": with_examples(touches)}
+
+
+STYLE_BOARDS = config.ROOT / "fixtures" / "style_boards"  # scripts/make_style_boards.py
+
+
+def styles_boards() -> dict[str, list[dict]]:
+    path = STYLE_BOARDS / "boards.json"
+    return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+
+
+def board_out(style_id: str, pieces: list[dict]) -> dict:
+    return {"style": style_id, "name": styles.BY_ID[style_id].name, "pieces": [
+        {"id": f"{style_id}/{p['id']}", "category": p["category"], "name": p["name"],
+         "cutout_url": f"/api/style-boards/{style_id}/{p['id']}.webp"} for p in pieces]}
 
 
 def with_examples(touches: list[dict]) -> list[dict]:

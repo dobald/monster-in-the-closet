@@ -304,7 +304,9 @@ function PlaceStep({ profile, ctx, onNext }: { profile: Profile; ctx: AppCtx; on
 
 function DayStep({ profile, ctx, onNext }: { profile: Profile; ctx: AppCtx; onNext: () => void }) {
   // First run defaults to "just weather": most people don't know what an .ics file is. Editing keeps the saved choice.
-  const [kind, setKind] = useState<Profile["calendar"]>(profile.onboarded || profile.calendar === "ics" ? profile.calendar : "none");
+  const [kind, setKind] = useState<Profile["calendar"]>(profile.onboarded || profile.calendar === "ics" || profile.calendar === "link" ? profile.calendar : "none");
+  const [link, setLink] = useState("");
+  const [linked, setLinked] = useState<string | null>(profile.calendar === "link" ? profile.calendar_name : null);
   const [fileName, setFileName] = useState(profile.calendar_name);
   const [uploaded, setUploaded] = useState<{ events: number; today: string[] } | null>(null);
   const [busy, setBusy] = useState(false);
@@ -324,10 +326,24 @@ function DayStep({ profile, ctx, onNext }: { profile: Profile; ctx: AppCtx; onNe
     }
   };
 
+  const connect = async () => {
+    setBusy(true);
+    try {
+      const r = await api.connectCalendar(link);
+      setLinked(r.profile.calendar_name);
+      setLink("");
+      setUploaded({ events: r.events, today: r.today.map((e) => `${e.start} ${e.title}`) });
+    } catch (e) {
+      ctx.toast((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const save = async () => {
     setBusy(true);
     try {
-      if (kind !== "ics") await api.updateProfile({ calendar: kind });
+      if (kind !== "ics" && kind !== "link") await api.updateProfile({ calendar: kind });
       onNext();
     } catch (e) {
       ctx.toast((e as Error).message);
@@ -342,7 +358,27 @@ function DayStep({ profile, ctx, onNext }: { profile: Profile; ctx: AppCtx; onNe
       <Title en="WHAT'S ON?" ja="予定" sub="I dress you for your plans too: a crit, a dinner out, a date." />
       <div role="radiogroup" aria-label="Calendar" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
         <Option on={kind === "none"} title="Just weather" sub="No calendar needed. You can add one later in Notes." onPick={() => setKind("none")} />
-        <Option on={kind === "ics"} title="Add my calendar" sub="An .ics file from Google Calendar or Apple Calendar." onPick={() => setKind("ics")}>
+        <Option on={kind === "link"} title="Link my calendar" sub="Stays up to date: new plans show up on their own." onPick={() => setKind("link")}>
+          <span className="small">
+            Google: Settings → your calendar → Integrate calendar → <strong>Secret address in iCal format</strong>. Apple: share the calendar as Public, copy the link. Outlook: Shared calendars → Publish → ICS.
+          </span>
+          <label style={{ display: "flex", alignItems: "center", height: 44, padding: "0 14px", border: "var(--line)", borderRadius: 22, background: "var(--washi)" }}>
+            <span style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", clip: "rect(0 0 0 0)" }}>Calendar link</span>
+            <input value={link} onChange={(e) => setLink(e.target.value)} placeholder="https://… or webcal://…" inputMode="url" autoComplete="off" spellCheck={false}
+              style={{ flex: 1, minWidth: 0, border: 0, outline: "none", background: "transparent", fontSize: 14 }} />
+          </label>
+          <button type="button" className="btn press" style={{ height: 44 }} disabled={busy || link.trim().length < 10} onClick={connect}>
+            {busy ? "Checking it…" : linked ? "Use a different link" : "Connect"}
+          </button>
+          {linked && (
+            <span className="small">
+              Linked to <strong>{linked}</strong>{uploaded ? ` · ${uploaded.events} event${uploaded.events === 1 ? "" : "s"}` : ""}.{" "}
+              {uploaded && (uploaded.today.length ? `Today: ${uploaded.today.join(", ")}.` : "Nothing on today.")}
+            </span>
+          )}
+          <span className="small muted">The link is a key to your calendar: it's kept in your closet's private storage and never shown again.</span>
+        </Option>
+        <Option on={kind === "ics"} title="Upload a calendar file" sub="A one-off .ics export from Google Calendar or Apple Calendar." onPick={() => setKind("ics")}>
           <span className="small">
             Google: Settings → Import &amp; export → Export, then unzip. Apple: File → Export → Export.
           </span>
@@ -361,8 +397,8 @@ function DayStep({ profile, ctx, onNext }: { profile: Profile; ctx: AppCtx; onNe
       </div>
       <span className="small muted">Only event titles, times and places are read. The file stays in your closet's private storage.</span>
       <Footer>
-        <button type="button" className="btn primary press block" style={{ height: 52 }} disabled={busy || (kind === "ics" && !hasIcs)} onClick={save}>
-          {kind === "ics" && !hasIcs ? "Choose a file, or pick another option" : "Next →"}
+        <button type="button" className="btn primary press block" style={{ height: 52 }} disabled={busy || (kind === "ics" && !hasIcs) || (kind === "link" && !linked)} onClick={save}>
+          {kind === "ics" && !hasIcs ? "Choose a file, or pick another option" : kind === "link" && !linked ? "Connect a link, or pick another option" : "Next →"}
         </button>
       </Footer>
     </>
@@ -424,12 +460,13 @@ function ClosetStep({ profile, ctx, onChange, onNext }: { profile: Profile; ctx:
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
             <Oni mood="fed" size={60} />
-            <h2 className="display" style={{ fontSize: 30 }}>FOUND {scan.items.length}!</h2>
+            <h2 className="display" style={{ fontSize: 30 }}>{scan.replayed ? "DEMO SCAN" : `FOUND ${scan.items.length}!`}</h2>
           </div>
+          {scan.replayed && <span className="small" style={{ color: "var(--shu)", fontWeight: 700 }}>Demo mode: your photo wasn't sent to the models, so this is a recorded scan, not your clothes. Start the server in live mode to scan for real.</span>}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 8 }}>
             {scan.items.map((it, n) => (
               <span key={it.id} className="halftone" title={itemName(it)} style={{ aspectRatio: "1", border: "var(--line)", borderRadius: 8, padding: 4, animation: `rise .3s ease-out ${n * 0.05}s both` }}>
-                <img className="cutout" src={it.cutout_url} alt={itemName(it)} />
+                <img className="cutout" src={it.photo_url} alt={itemName(it)} />
               </span>
             ))}
           </div>
@@ -518,7 +555,7 @@ function FlatLayGuide() {
         ))}
       </div>
       <ol style={{ margin: 0, paddingLeft: 18, display: "flex", flexDirection: "column", justifyContent: "center", gap: 6, fontSize: 14, lineHeight: 1.35 }}>
-        <li><strong>4–8 pieces</strong> flat on a bed or the floor</li>
+        <li><strong>Up to 8 pieces</strong> flat on a bed or the floor; one is fine</li>
         <li><strong>No overlaps:</strong> leave a gap around each</li>
         <li><strong>Print side up</strong>, in good light</li>
       </ol>
@@ -581,11 +618,15 @@ function HistoryStep({ ctx, onNext }: { ctx: AppCtx; onNext: () => void }) {
 function TasteStep({ ctx, onNext }: { ctx: AppCtx; onNext: () => void }) {
   return (
     <>
-      <Title en="THIS OR THAT" ja="好み" sub="A few quick picks from your own closet. I learn your taste from them, and keep learning from what you wear." />
+      <Title en="WHICH IS MORE YOU?" ja="好み" sub="A few pairs of style boards. Pick the one you'd rather wear and I'll find the styles you're drawn to." />
       <Quiz
+        kind="styles"
         ctx={ctx}
-        onDone={(saved) => {
-          if (saved) ctx.toast(`Learned from ${saved} pick${saved === 1 ? "" : "s"}. Let's see what I'd put you in.`);
+        onDone={async (saved) => {
+          if (saved) {
+            const top = await api.taste().then((d) => d.styles.liked.slice(0, 2).map((x) => x.name.toLowerCase())).catch(() => []);
+            ctx.toast(top.length ? `You're drawn to ${top.join(" and ")}. I'll keep that in mind.` : `Learned from ${saved} picks.`);
+          }
           onNext();
         }}
       />
@@ -645,7 +686,7 @@ function FirstPick({ profile, ctx, editing, onScan, onDone }: { profile: Profile
           <div style={{ display: "grid", gridTemplateColumns: `repeat(${Math.min(look.items.length, 4)}, minmax(0, 1fr))`, gap: 8 }}>
             {look.items.slice(0, 4).map((it: Item, n) => (
               <span key={it.id} className="halftone" style={{ aspectRatio: "3 / 4", border: "var(--line)", borderRadius: 8, padding: 6, transform: `rotate(${[-3, 2, -1, 3][n]}deg)`, animation: `rise-tilt .4s ease-out ${n * 0.08}s both` }}>
-                <img className="cutout" src={it.cutout_url} alt={itemName(it)} />
+                <img className="cutout" src={it.photo_url} alt={itemName(it)} />
               </span>
             ))}
           </div>

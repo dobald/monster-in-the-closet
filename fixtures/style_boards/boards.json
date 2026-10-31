@@ -1,0 +1,421 @@
+{
+ "streetwear": [
+  {
+   "id": "top",
+   "category": "top",
+   "name": "an oversized heather grey hoodie with a bold graphic print on the chest"
+  },
+  {
+   "id": "bottom",
+   "category": "bottom",
+   "name": "baggy black cargo pants with big side pockets"
+  },
+  {
+   "id": "outerwear",
+   "category": "outerwear",
+   "name": "a black and cream wool varsity jacket with leather sleeves"
+  },
+  {
+   "id": "shoes",
+   "category": "shoes",
+   "name": "a pair of chunky white and grey retro basketball sneakers"
+  },
+  {
+   "id": "bag",
+   "category": "bag",
+   "name": "a small black nylon crossbody sling bag"
+  },
+  {
+   "id": "hat",
+   "category": "hat",
+   "name": "a black fitted baseball cap"
+  },
+  {
+   "id": "jewelry",
+   "category": "jewelry",
+   "name": "a thick silver curb chain necklace"
+  }
+ ],
+ "dark_academia": [
+  {
+   "id": "top",
+   "category": "top",
+   "name": "a dark brown argyle knit sweater vest"
+  },
+  {
+   "id": "bottom",
+   "category": "bottom",
+   "name": "charcoal grey wool pleated trousers"
+  },
+  {
+   "id": "outerwear",
+   "category": "outerwear",
+   "name": "a brown herringbone tweed blazer"
+  },
+  {
+   "id": "shoes",
+   "category": "shoes",
+   "name": "a pair of dark brown leather penny loafers"
+  },
+  {
+   "id": "bag",
+   "category": "bag",
+   "name": "a worn brown leather satchel bag"
+  },
+  {
+   "id": "eyewear",
+   "category": "eyewear",
+   "name": "a pair of round tortoiseshell glasses"
+  },
+  {
+   "id": "jewelry",
+   "category": "jewelry",
+   "name": "a vintage gold watch with a brown leather strap"
+  }
+ ],
+ "cyberpunk": [
+  {
+   "id": "top",
+   "category": "top",
+   "name": "a black fitted technical long-sleeve top with reflective panels"
+  },
+  {
+   "id": "bottom",
+   "category": "bottom",
+   "name": "black tapered techwear cargo pants with straps and buckles"
+  },
+  {
+   "id": "outerwear",
+   "category": "outerwear",
+   "name": "a black waterproof shell jacket with a high collar and taped seams"
+  },
+  {
+   "id": "shoes",
+   "category": "shoes",
+   "name": "a pair of black chunky high-top tactical sneaker boots"
+  },
+  {
+   "id": "bag",
+   "category": "bag",
+   "name": "a black modular chest rig bag with buckles"
+  },
+  {
+   "id": "eyewear",
+   "category": "eyewear",
+   "name": "black wraparound shield sunglasses with a cyan tint"
+  },
+  {
+   "id": "jewelry",
+   "category": "jewelry",
+   "name": "a silver chain choker necklace with a small metal plate"
+  }
+ ],
+ "gothic": [
+  {
+   "id": "top",
+   "category": "top",
+   "name": "a black velvet blouse with lace trim at the collar and cuffs"
+  },
+  {
+   "id": "bottom",
+   "category": "bottom",
+   "name": "black velvet wide-leg trousers"
+  },
+  {
+   "id": "outerwear",
+   "category": "outerwear",
+   "name": "a long black leather trench coat"
+  },
+  {
+   "id": "shoes",
+   "category": "shoes",
+   "name": "a pair of black leather platform combat boots with silver buckles"
+  },
+  {
+   "id": "bag",
+   "category": "bag",
+   "name": "a small black handbag with silver hardware"
+  },
+  {
+   "id": "jewelry",
+   "category": "jewelry",
+   "name": "a silver cross pendant necklace"
+  },
+  {
+   "id": "accessory",
+   "category": "accessory",
+   "name": "a black lace choker"
+  }
+ ],
+ "brutalist": [
+  {
+   "id": "top",
+   "category": "top",
+   "name": "a draped asymmetric dark grey jersey top with raw edges"
+  },
+  {
+   "id": "bottom",
+   "category": "bottom",
+   "name": "black dropped-crotch wide trousers"
+  },
+  {
+   "id": "outerwear",
+   "category": "outerwear",
+   "name": "a black boxy oversized architectural wool coat"
+  },
+  {
+   "id": "shoes",
+   "category": "shoes",
+   "name": "a pair of chunky black square-toe leather boots"
+  },
+  {
+   "id": "bag",
+   "category": "bag",
+   "name": "a black geometric structured leather bag"
+  },
+  {
+   "id": "eyewear",
+   "category": "eyewear",
+   "name": "black angular oversized sunglasses"
+  },
+  {
+   "id": "jewelry",
+   "category": "jewelry",
+   "name": "a chunky sculptural silver cuff bracelet"
+  }
+ ],
+ "parisian_chic": [
+  {
+   "id": "top",
+   "category": "top",
+   "name": "a navy and white Breton striped long-sleeve top"
+  },
+  {
+   "id": "bottom",
+   "category": "bottom",
+   "name": "straight-leg dark indigo jeans"
+  },
+  {
+   "id": "outerwear",
+   "category": "outerwear",
+   "name": "a beige double-breasted trench coat"
+  },
+  {
+   "id": "shoes",
+   "category": "shoes",
+   "name": "a pair of black leather ballet flats"
+  },
+  {
+   "id": "bag",
+   "category": "bag",
+   "name": "a small woven straw basket bag with leather handles"
+  },
+  {
+   "id": "accessory",
+   "category": "accessory",
+   "name": "a red silk neck scarf"
+  },
+  {
+   "id": "eyewear",
+   "category": "eyewear",
+   "name": "black cat-eye sunglasses"
+  }
+ ],
+ "soft": [
+  {
+   "id": "top",
+   "category": "top",
+   "name": "a fluffy pastel pink cropped cardigan"
+  },
+  {
+   "id": "bottom",
+   "category": "bottom",
+   "name": "a cream pleated midi skirt"
+  },
+  {
+   "id": "shoes",
+   "category": "shoes",
+   "name": "a pair of white and pastel pink retro sneakers"
+  },
+  {
+   "id": "bag",
+   "category": "bag",
+   "name": "a small pastel lilac shoulder bag"
+  },
+  {
+   "id": "hat",
+   "category": "hat",
+   "name": "a cream knitted bucket hat"
+  },
+  {
+   "id": "jewelry",
+   "category": "jewelry",
+   "name": "a dainty gold heart pendant necklace"
+  }
+ ],
+ "minimalist": [
+  {
+   "id": "top",
+   "category": "top",
+   "name": "a crisp white heavyweight t-shirt"
+  },
+  {
+   "id": "bottom",
+   "category": "bottom",
+   "name": "black straight tailored trousers"
+  },
+  {
+   "id": "outerwear",
+   "category": "outerwear",
+   "name": "a black oversized wool blazer"
+  },
+  {
+   "id": "shoes",
+   "category": "shoes",
+   "name": "a pair of clean white leather minimalist sneakers"
+  },
+  {
+   "id": "bag",
+   "category": "bag",
+   "name": "a black leather tote bag"
+  },
+  {
+   "id": "jewelry",
+   "category": "jewelry",
+   "name": "a simple silver watch with a mesh strap"
+  }
+ ],
+ "y2k": [
+  {
+   "id": "top",
+   "category": "top",
+   "name": "a baby pink cropped baby tee with a rhinestone heart"
+  },
+  {
+   "id": "bottom",
+   "category": "bottom",
+   "name": "low-rise flared light-wash jeans"
+  },
+  {
+   "id": "shoes",
+   "category": "shoes",
+   "name": "a pair of chunky white and silver platform sneakers"
+  },
+  {
+   "id": "bag",
+   "category": "bag",
+   "name": "a small silver metallic baguette shoulder bag"
+  },
+  {
+   "id": "eyewear",
+   "category": "eyewear",
+   "name": "rimless sunglasses with blue tinted lenses"
+  },
+  {
+   "id": "jewelry",
+   "category": "jewelry",
+   "name": "a colourful beaded charm necklace"
+  }
+ ],
+ "gorpcore": [
+  {
+   "id": "top",
+   "category": "top",
+   "name": "a forest green half-zip fleece pullover"
+  },
+  {
+   "id": "bottom",
+   "category": "bottom",
+   "name": "khaki nylon hiking pants"
+  },
+  {
+   "id": "outerwear",
+   "category": "outerwear",
+   "name": "a bright orange technical shell jacket"
+  },
+  {
+   "id": "shoes",
+   "category": "shoes",
+   "name": "a pair of grey and black trail running shoes"
+  },
+  {
+   "id": "bag",
+   "category": "bag",
+   "name": "a black hiking belt bag"
+  },
+  {
+   "id": "hat",
+   "category": "hat",
+   "name": "a tan nylon bucket hat"
+  }
+ ],
+ "old_money": [
+  {
+   "id": "top",
+   "category": "top",
+   "name": "a cream cable-knit cashmere sweater"
+  },
+  {
+   "id": "bottom",
+   "category": "bottom",
+   "name": "beige pleated wool trousers"
+  },
+  {
+   "id": "outerwear",
+   "category": "outerwear",
+   "name": "a navy blazer with gold buttons"
+  },
+  {
+   "id": "shoes",
+   "category": "shoes",
+   "name": "a pair of brown suede loafers"
+  },
+  {
+   "id": "bag",
+   "category": "bag",
+   "name": "a tan leather structured top-handle bag"
+  },
+  {
+   "id": "eyewear",
+   "category": "eyewear",
+   "name": "tortoiseshell sunglasses"
+  },
+  {
+   "id": "jewelry",
+   "category": "jewelry",
+   "name": "a thin gold chain bracelet"
+  }
+ ],
+ "grunge": [
+  {
+   "id": "top",
+   "category": "top",
+   "name": "a faded black band t-shirt"
+  },
+  {
+   "id": "bottom",
+   "category": "bottom",
+   "name": "ripped light-wash baggy jeans"
+  },
+  {
+   "id": "outerwear",
+   "category": "outerwear",
+   "name": "an oversized red and black plaid flannel shirt"
+  },
+  {
+   "id": "shoes",
+   "category": "shoes",
+   "name": "a pair of scuffed black leather combat boots"
+  },
+  {
+   "id": "hat",
+   "category": "hat",
+   "name": "a charcoal rib-knit beanie"
+  },
+  {
+   "id": "jewelry",
+   "category": "jewelry",
+   "name": "a silver wallet chain"
+  }
+ ]
+}

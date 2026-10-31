@@ -52,6 +52,24 @@ export default function Closet({ ctx }: { ctx: AppCtx }) {
       .catch((e) => setError((e as Error).message));
   }, [ctx.wardrobeVersion]);
 
+  // Clean product shots are made in the background; refresh the grid as they land.
+  useEffect(() => {
+    let stop = false;
+    let timer: number | undefined;
+    let done = -1;
+    const poll = (s: { done: number; running: number }) => {
+      if (stop) return;
+      if (done >= 0 && s.done !== done) api.wardrobe().then((w) => !stop && setItems(w)).catch(() => {});
+      done = s.done;
+      if (s.running > 0) timer = window.setTimeout(() => api.products().then(poll).catch(() => {}), 4000);
+    };
+    api.makeProducts().then(poll).catch(() => {});
+    return () => {
+      stop = true;
+      window.clearTimeout(timer);
+    };
+  }, [ctx.wardrobeVersion]);
+
   const shown = useMemo(() => {
     if (!items) return [];
     const f = FILTERS.find((x) => x.label === filter)!;
@@ -197,7 +215,7 @@ export default function Closet({ ctx }: { ctx: AppCtx }) {
               }}
             >
               <span className="halftone" style={{ position: "relative", display: "block", width: "100%", aspectRatio: "1", border: "var(--line)", borderRadius: 8, padding: 6 }}>
-                <img className="cutout" src={it.cutout_url} alt="" loading="lazy" />
+                <img className="cutout" src={it.photo_url} alt="" loading="lazy" />
                 {idle >= 30 && (
                   <span className="sticker" style={{ position: "absolute", top: 6, left: 4, animation: "wobble 3s ease-in-out infinite" }}>
                     {idle}日

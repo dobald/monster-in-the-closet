@@ -4,7 +4,7 @@ import type { AppCtx } from "../App";
 import Oni from "../Oni";
 import { MergedNote, ReviewPairs } from "./Duplicates";
 
-// Flat-lay scan (wireframe 1a/1b): pick or shoot 1-10 photos of 4-8 items each, send them as one batch,
+// Flat-lay scan (wireframe 1a/1b): pick or shoot 1-10 photos of up to 8 items each (one is fine), send them as one batch,
 // then show the cutouts the oni found.
 
 const MAX = 10;
@@ -133,7 +133,7 @@ export default function Scan({ ctx }: { ctx: AppCtx }) {
           </div>
         ) : (
           <p style={{ position: "absolute", left: 30, right: 30, top: 34, margin: 0, padding: "8px 10px", borderRadius: 8, background: "var(--washi)", border: "var(--line)", fontSize: 14, fontWeight: 700, lineHeight: 1.35, textAlign: "center" }}>
-            Lay 4–8 items flat and take a photo. Spread them out so they don't overlap. Repeat for more batches.
+            Lay up to 8 pieces flat, even just one or two, and take a photo. Spread them out so they don't overlap.
           </p>
         )}
       </div>
@@ -145,6 +145,13 @@ export default function Scan({ ctx }: { ctx: AppCtx }) {
           </span>
         ))}
       </div>
+
+      {ctx.health?.mode === "fixture" && (
+        <p className="small" style={{ margin: 0, padding: "8px 10px", border: "1.5px dashed var(--shu)", borderRadius: 8 }}>
+          <strong>Demo mode.</strong> Scans here replay a recorded closet instead of reading your photo. Start the server in live
+          mode to scan your own clothes.
+        </p>
+      )}
 
       {error && (
         <p role="alert" className="small" style={{ margin: 0, color: "var(--shu)", fontWeight: 700 }}>
@@ -190,7 +197,7 @@ function ScanDone({ result, again, ctx }: { result: ScanResult; again: () => voi
       <header style={{ display: "flex", alignItems: "center", gap: 12 }}>
         <Oni mood="fed" size={70} />
         <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-          <h1 className="display" style={{ fontSize: 36 }}>FOUND {result.items.length}!</h1>
+          <h1 className="display" style={{ fontSize: 36 }}>{result.replayed ? "DEMO SCAN" : `FOUND ${result.items.length}!`}</h1>
           <span className="label" style={{ fontWeight: 400 }}>
             {result.photos} PHOTO{result.photos === 1 ? "" : "S"} · {result.seconds.toFixed(1)}S{result.replayed ? " · DEMO REPLAY" : ""}
             {result.cached_photos ? ` · ${result.cached_photos} CACHED` : ""}
@@ -198,6 +205,11 @@ function ScanDone({ result, again, ctx }: { result: ScanResult; again: () => voi
         </div>
       </header>
 
+      {result.replayed && (
+        <p className="small" style={{ margin: 0, padding: "8px 10px", border: "1.5px dashed var(--shu)", borderRadius: 8 }}>
+          Demo mode: your photo wasn't sent to the models, so this is a recorded scan, not your clothes. Start the server in live mode to scan for real.
+        </p>
+      )}
       {result.duplicates && <MergedNote dupes={result.duplicates} />}
       <ReviewPairs pairs={review} ctx={ctx} onResolved={(p) => setReview(review.filter((x) => x !== p))} />
 
@@ -210,7 +222,7 @@ function ScanDone({ result, again, ctx }: { result: ScanResult; again: () => voi
             style={{ display: "flex", flexDirection: "column", gap: 4, padding: 0, border: 0, background: "transparent", textAlign: "left", animation: `rise .35s ease-out ${(0.06 * i).toFixed(2)}s both` }}
           >
             <span className="halftone" style={{ display: "block", aspectRatio: "1", border: "var(--line)", borderRadius: 8, padding: 6 }}>
-              <img className="cutout" src={it.cutout_url} alt="" />
+              <img className="cutout" src={it.photo_url} alt="" />
             </span>
             <span style={{ fontSize: 12, fontWeight: 700, lineHeight: 1.2 }}>{itemName(it)}</span>
           </button>

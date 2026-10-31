@@ -118,6 +118,10 @@ class Store:
             if "worn_estimated" not in cols:
                 self._db.execute("ALTER TABLE items ADD COLUMN worn_estimated INTEGER NOT NULL DEFAULT 0")
                 self._db.commit()
+            # Added later: a plan for one event (JSON {event, read}) rather than the whole day.
+            if "occasion" not in {r[1] for r in self._db.execute("PRAGMA table_info(plans)")}:
+                self._db.execute("ALTER TABLE plans ADD COLUMN occasion TEXT")
+                self._db.commit()
 
     # -- items
 
@@ -228,24 +232,37 @@ class Store:
     def add_plan(self, plan: dict) -> None:
         with self._lock, self._db:
             self._db.execute(
-                "INSERT INTO plans VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO plans (id, day, created_at, source, plan, trace, weather, calendar, notes, occasion) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (plan["id"], plan["day"], plan["created_at"], plan["source"], json.dumps(plan["plan"]),
-                 json.dumps(plan["trace"]), json.dumps(plan["weather"]), json.dumps(plan["calendar"]), plan["notes"]),
+                 json.dumps(plan["trace"]), json.dumps(plan["weather"]), json.dumps(plan["calendar"]), plan["notes"],
+                 json.dumps(plan["occasion"]) if plan.get("occasion") else None),
             )
 
     def get_plan(self, plan_id: str | None = None, day: str | None = None) -> dict | None:
-        """A plan by id, or the latest plan for a day."""
+        """A plan by id, or the latest whole-day plan for a day (plans for one event don't count)."""
         with self._lock:
             if plan_id:
                 row = self._db.execute("SELECT * FROM plans WHERE id = ?", (plan_id,)).fetchone()
             else:
-                row = self._db.execute("SELECT * FROM plans WHERE day = ? ORDER BY created_at DESC, rowid DESC LIMIT 1",
-                                       (day,)).fetchone()
-        if not row:
-            return None
+                row = self._db.execute("SELECT * FROM plans WHERE day = ? AND occasion IS NULL "
+                                       "ORDER BY created_at DESC, rowid DESC LIMIT 1", (day,)).fetchone()
+        return self._plan_row(row) if row else None
+
+    def occasion_plans(self, days: list[str]) -> list[dict]:
+        """Plans made for one event on these days, newest first."""
+        marks = ",".join("?" * len(days))
+        with self._lock:
+            rows = self._db.execute(f"SELECT * FROM plans WHERE occasion IS NOT NULL AND day IN ({marks}) "
+                                    "ORDER BY created_at DESC, rowid DESC", days).fetchall()
+        return [self._plan_row(r) for r in rows]
+
+    @staticmethod
+    def _plan_row(row) -> dict:
         d = dict(row)
         for k in ("plan", "trace", "weather", "calendar"):
             d[k] = json.loads(d[k])
+        d["occasion"] = json.loads(d["occasion"]) if d.get("occasion") else None
         return d
 
     def record_wear(self, day: str, item_ids: list[str], plan_id: str | None, look: int | None) -> None:

@@ -256,7 +256,8 @@ def outfits(items: list[dict], cold: bool, every_layer: bool = False) -> list[li
 
 
 def pick_stretch(model: Model, candidates: list[tuple[list[dict], np.ndarray]], exposure: np.ndarray,
-                 pairs_worn: set[frozenset], taken: list[set[str]], rng: np.random.Generator) -> dict | None:
+                 pairs_worn: set[frozenset], taken: list[set[str]], rng: np.random.Generator,
+                 lean: np.ndarray | None = None) -> dict | None:
     """One step outside the comfort zone. Each candidate is an outfit from their own closet with
     exactly one feature they have never worn (or, failing that, two pieces never worn together).
     Thompson sampling: draw a plausible taste from the posterior, take the outfit it likes best."""
@@ -272,6 +273,8 @@ def pick_stretch(model: Model, candidates: list[tuple[list[dict], np.ndarray]], 
         if len(new) > 1 or not (new or new_pair):
             continue
         score = float(x @ w[:F]) + (0.5 if new else 0.2)
+        if lean is not None and x.any():  # towards the style they want to grow into (closet/styles.py)
+            score += 0.6 * float(x @ lean) / (float(np.linalg.norm(x)) * float(np.linalg.norm(lean)) or 1.0)
         if best is None or score > best[0]:
             best = (score, outfit, x, new[0] if new else None, core)
     if not best:
