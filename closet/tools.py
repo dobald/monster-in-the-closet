@@ -83,6 +83,9 @@ def _calendar(data: bytes):
         return None
 
 
+MAX_EVENTS_PER_DAY = 40
+
+
 def ics_count(data: bytes) -> int:
     """How many events an .ics file holds (0 if it isn't one)."""
     cal = _calendar(data)
@@ -99,8 +102,14 @@ def ics_events(data: bytes, day: date) -> list[dict]:
     cal = _calendar(data)
     if cal is None:
         return []
+    for ev in cal.walk("VEVENT"):
+        # An event repeating every hour, minute or second is never a plan to dress for, and expanding
+        # one from an uploaded or linked file could take minutes: keep just its first occurrence.
+        rule = ev.get("RRULE")
+        if rule and str((rule.get("FREQ") or [""])[0]).upper() in ("HOURLY", "MINUTELY", "SECONDLY"):
+            del ev["RRULE"]
     out = []
-    for ev in recurring_ical_events.of(cal).at(day):
+    for ev in list(recurring_ical_events.of(cal).at(day))[:MAX_EVENTS_PER_DAY]:
         start, end = ev.get("DTSTART"), ev.get("DTEND")
         s, e = (start.dt if start else None), (end.dt if end else None)
         if s is None:

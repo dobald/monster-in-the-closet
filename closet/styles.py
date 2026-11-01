@@ -277,7 +277,7 @@ def closet_mix(outfit_vectors: list[np.ndarray]) -> list[dict]:
         prof = profile(s.id)
         raw.append(max(0.0, float(prof @ mean) / float(np.abs(prof).sum() or 1)))
     total = sum(raw) or 1.0
-    out = [{"id": s.id, "name": s.name, "ja": s.ja, "pct": round(100 * r / total)} for s, r in zip(STYLES, raw)]
+    out = [{"id": s.id, "name": s.name, "ja": s.ja, "pct": round(100 * r / total)} for s, r in zip(STYLES, raw, strict=True)]
     return sorted(out, key=lambda x: -x["pct"])
 
 

@@ -140,7 +140,7 @@ function OccasionSheet({ ctx, start, onClose }: { ctx: AppCtx; start: Open; onCl
 
   useEffect(() => {
     if (!("typing" in start)) plan_({ event: start.event, day: start.day }, false, start.planId);
-    const esc = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    const esc = (e: KeyboardEvent) => e.key === "Escape" && !e.defaultPrevented && onClose(); // a sheet on top closes first
     window.addEventListener("keydown", esc);
     return () => window.removeEventListener("keydown", esc);
     // eslint-disable-next-line react-hooks/exhaustive-deps

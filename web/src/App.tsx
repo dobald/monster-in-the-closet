@@ -113,6 +113,20 @@ export default function App() {
     refreshOni();
   };
 
+  // Escape closes the sheet on top. Capture phase, so a sheet underneath (Today's occasion sheet)
+  // sees the event as handled and stays open.
+  useEffect(() => {
+    if (!overlay) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || e.defaultPrevented) return;
+      e.preventDefault();
+      close();
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [overlay]);
+
   if (onboarding === "checking") {
     return (
       <div className="app" style={{ display: "flex", alignItems: "center", justifyContent: "center" }}>

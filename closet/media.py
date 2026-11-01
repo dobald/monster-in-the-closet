@@ -26,12 +26,20 @@ def is_video(path: Path) -> bool:
     return path.suffix.lower() in VIDEO_EXTS
 
 
+# A 48 MP phone photo is fine; a crafted 20k x 20k image is refused before it is decoded.
+Image.MAX_IMAGE_PIXELS = 64_000_000
+
+
 def load_image(path: Path | io.BytesIO, max_edge: int = MAX_IMAGE_EDGE) -> Image.Image:
     """Load a photo (file path or in-memory upload) upright, EXIF rotation applied, capped in size.
 
-    SAM coordinates refer to the image we send, so we always cut from this same copy.
+    SAM coordinates refer to the image we send, so we always cut from this same copy. JPEGs are
+    decoded at reduced scale when they're much bigger than needed (draft mode), which keeps ten
+    phone photos at once from using gigabytes of memory.
     """
-    img = ImageOps.exif_transpose(Image.open(path)).convert("RGB")
+    img = Image.open(path)
+    img.draft("RGB", (max_edge, max_edge))
+    img = ImageOps.exif_transpose(img).convert("RGB")
     img.thumbnail((max_edge, max_edge))
     return img
 

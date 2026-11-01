@@ -9,6 +9,7 @@ Interactive docs at http://127.0.0.1:8000/docs
 from __future__ import annotations
 
 import os
+import re
 from contextlib import asynccontextmanager
 from datetime import date, timedelta
 from pathlib import Path
@@ -17,6 +18,7 @@ from typing import Any, Literal
 from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, RedirectResponse
+from PIL import Image, UnidentifiedImageError
 from pydantic import BaseModel, Field, ValidationError
 
 from closet import config
@@ -157,7 +159,9 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Monster in the Closet API", version="0.1.0", lifespan=lifespan)
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+if os.environ.get("MONSTER_CORS_ORIGINS"):  # only for a front end served from another origin
+    app.add_middleware(CORSMiddleware, allow_origins=os.environ["MONSTER_CORS_ORIGINS"].split(","),
+                       allow_methods=["*"], allow_headers=["*"], allow_credentials=True)
 app.add_middleware(BudgetMiddleware)  # runs inside ClosetMiddleware, so it knows the closet
 app.add_middleware(ClosetMiddleware)  # added last, so it runs first
 
@@ -167,7 +171,13 @@ def C() -> Closet:
     try:
         return app.state.closets.get(current_id())
     except ClosetsFull as e:
-        raise HTTPException(503, str(e))
+        raise HTTPException(503, str(e)) from e
+
+
+# File names in URLs: plain ASCII letters and digits only (str.isalnum() also accepts other scripts).
+SAFE_NAME = re.compile(r"^[A-Za-z0-9]{1,64}$")
+# An upload that isn't an image, or one big enough to be a decompression bomb (closet/media.py).
+BAD_IMAGE = (UnidentifiedImageError, Image.DecompressionBombError)
 
 
 def _item_out(d: dict) -> ItemOut:
@@ -220,7 +230,9 @@ async def create_scan(photos: list[UploadFile] = File(..., description="1-10 fla
     try:
         record = await C().pipeline.run_scan(batch)
     except FixtureMissing as e:
-        raise HTTPException(409, str(e))
+        raise HTTPException(409, str(e)) from e
+    except BAD_IMAGE:
+        raise HTTPException(422, "That file isn't a photo we can read (or it's enormous). Send a JPEG, PNG, WebP or HEIC.") from None
     store = C().store
     items = [store.get_item(i) for i in record["item_ids"]]
     app.state.products.start([i for i in items if i], C().settings.cutout_dir)  # tidy photos in the background
@@ -331,7 +343,7 @@ def fix_tags(item_id: str, changes: dict[str, Any]) -> ItemOut:
     try:
         merged = Garment.model_validate({**(item["tags"] or {}), **changes})
     except ValidationError as e:
-        raise HTTPException(422, e.errors(include_url=False))
+        raise HTTPException(422, e.errors(include_url=False)) from e
     store.update_tags(item_id, merged)
     if VISUAL & set(changes):
         _redraw(item_id)
@@ -367,7 +379,7 @@ async def retag_item(item_id: str, body: RetagIn) -> ItemOut:
     try:
         await C().pipeline.retag(item_id, body.hint)
     except FixtureMissing as e:
-        raise HTTPException(409, str(e))
+        raise HTTPException(409, str(e)) from e
     _redraw(item_id)
     return _item_out(C().store.get_item(item_id))
 
@@ -383,9 +395,11 @@ async def rescan_item(item_id: str, photo: UploadFile = File(..., description="O
     try:
         new_id = await C().pipeline.rescan(item_id, photo.filename or "rescan.jpg", data)
     except FixtureMissing as e:
-        raise HTTPException(409, str(e))
+        raise HTTPException(409, str(e)) from e
+    except BAD_IMAGE:
+        raise HTTPException(422, "That file isn't a photo we can read (or it's enormous). Send a JPEG, PNG, WebP or HEIC.") from None
     except ValueError as e:
-        raise HTTPException(422, str(e))
+        raise HTTPException(422, str(e)) from e
     if new_id != item_id:
         app.state.products.start([C().store.get_item(new_id)], C().settings.cutout_dir)
     return _item_out(C().store.get_item(new_id))
@@ -412,20 +426,21 @@ async def make_products() -> dict:
 
 @app.get("/api/products/{item_id}.webp")
 def product_file(item_id: str) -> FileResponse:
+    # Product shots are shared by every closet on disk, so check this closet owns the item.
     path = app.state.products.dir / f"{item_id}.webp"
-    if not item_id.isalnum() or not path.exists():
+    if not SAFE_NAME.match(item_id) or not path.exists() or not C().store.get_item(item_id):
         raise HTTPException(404, "No such product shot.")
-    return FileResponse(path, media_type="image/webp", headers={"Cache-Control": "public, max-age=31536000, immutable"})
+    return FileResponse(path, media_type="image/webp", headers={"Cache-Control": "private, max-age=31536000, immutable"})
 
 
 @app.get("/api/cutouts/{item_id}.png")
 def cutout(item_id: str) -> FileResponse:
-    if not item_id.isalnum():
+    if not SAFE_NAME.match(item_id):
         raise HTTPException(404, "No such cutout.")
     path = C().settings.cutout_dir / f"{item_id}.png"
     if not path.exists():
         raise HTTPException(404, "No such cutout.")
-    return FileResponse(path, media_type="image/png", headers={"Cache-Control": "public, max-age=31536000, immutable"})
+    return FileResponse(path, media_type="image/png", headers={"Cache-Control": "private, max-age=31536000, immutable"})
 
 
 def _plan_out(record: dict) -> dict:
@@ -451,7 +466,7 @@ async def make_plan(body: PlanIn | None = None) -> dict:
     try:
         record = await C().planning.make_plan(body.day or today_local(), body.notes, body.lat, body.lon, body.fresh)
     except ValueError as e:
-        raise HTTPException(409, str(e))
+        raise HTTPException(409, str(e)) from e
     C().planning.mark_seen(record)
     return _plan_out(record)
 
@@ -473,7 +488,7 @@ async def plan_occasion(body: OccasionIn) -> dict:
     try:
         record = await C().planning.make_plan(day, body.notes, fresh=body.fresh, event=body.event.model_dump(exclude_none=True))
     except ValueError as e:
-        raise HTTPException(409, str(e))
+        raise HTTPException(409, str(e)) from e
     return _plan_out(record)
 
 
@@ -512,9 +527,9 @@ def answer_yesterday(body: YesterdayIn, background: BackgroundTasks) -> dict:
     try:
         worn = C().planning.answer_yesterday(today_local(), body.look)
     except KeyError as e:
-        raise HTTPException(404, str(e))
+        raise HTTPException(404, str(e)) from e
     except IndexError as e:
-        raise HTTPException(422, str(e))
+        raise HTTPException(422, str(e)) from e
     if worn:
         background.add_task(C().planning.prebuild, today_local() + timedelta(days=1))
     return {"worn": worn}
@@ -531,9 +546,9 @@ def wear(plan_id: str, background: BackgroundTasks, body: WearIn | None = None) 
         background.add_task(C().planning.prebuild, day + timedelta(days=1))
         return out
     except KeyError as e:
-        raise HTTPException(404, str(e))
+        raise HTTPException(404, str(e)) from e
     except IndexError as e:
-        raise HTTPException(422, str(e))
+        raise HTTPException(422, str(e)) from e
 
 
 @app.post("/api/checkins")
@@ -595,7 +610,7 @@ async def thrift_example(body: ExampleIn) -> dict:
 @app.get("/api/examples/{name}.jpg")
 def example_file(name: str) -> FileResponse:
     path = app.state.examples.dir / f"{name}.jpg"
-    if not name.isalnum() or not path.exists():
+    if not SAFE_NAME.match(name) or not path.exists():
         raise HTTPException(404, "No such example.")
     return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "public, max-age=31536000, immutable"})
 
@@ -606,7 +621,7 @@ async def find_gaps(body: GapsIn | None = None) -> dict:
     try:
         record = await C().planning.gaps(today_local(), (body or GapsIn()).fresh)
     except ValueError as e:
-        raise HTTPException(409, str(e))
+        raise HTTPException(409, str(e)) from e
     return {**record, "pieces": [_with_pairs(p) for p in record["pieces"]]}
 
 
@@ -657,7 +672,7 @@ def set_tryon_profile(body: TryOnProfileIn) -> dict:
     try:
         return C().tryon.set_profile(body.mode, body.body)
     except (ValueError, ValidationError) as e:
-        raise HTTPException(422, str(e))
+        raise HTTPException(422, str(e)) from e
 
 
 @app.post("/api/tryon/photo")
@@ -669,7 +684,9 @@ async def upload_person_photo(photo: UploadFile = File(...), consent: bool = For
     try:
         return await C().tryon.set_photo(data, consent)
     except ValueError as e:
-        raise HTTPException(422 if "confirm" in str(e) else 409, str(e))
+        raise HTTPException(422 if "confirm" in str(e) else 409, str(e)) from e
+    except BAD_IMAGE:
+        raise HTTPException(422, "That file isn't a photo we can read (or it's enormous). Send a JPEG, PNG, WebP or HEIC.") from None
 
 
 @app.delete("/api/tryon/photo")
@@ -684,11 +701,11 @@ async def start_tryon(body: TryOnIn) -> dict:  # async: the render job is schedu
     try:
         return C().tryon.start(body.plan_id, body.look)
     except KeyError as e:
-        raise HTTPException(404, str(e).strip("'\""))
+        raise HTTPException(404, str(e).strip("'\"")) from e
     except IndexError as e:
-        raise HTTPException(422, str(e))
+        raise HTTPException(422, str(e)) from e
     except ValueError as e:
-        raise HTTPException(409, str(e))
+        raise HTTPException(409, str(e)) from e
 
 
 class LayersIn(BaseModel):
@@ -719,7 +736,7 @@ def tryon_stack(body: LayersIn) -> dict:
 @app.get("/api/layers/{base_key}/{name}.png")
 def layer_file(base_key: str, name: str) -> FileResponse:
     path = C().layers.root / base_key / f"{name}.png"
-    if not (base_key.isalnum() and name.isalnum()) or not path.exists():
+    if not (SAFE_NAME.match(base_key) and SAFE_NAME.match(name)) or not path.exists():
         raise HTTPException(404, "No such layer.")
     return FileResponse(path, media_type="image/png", headers={"Cache-Control": "private, max-age=31536000, immutable"})
 
@@ -730,9 +747,9 @@ def tryon_flatlay(plan_id: str, look: int = 0) -> dict:
     try:
         _, items = C().tryon._look(plan_id, look)
     except KeyError as e:
-        raise HTTPException(404, str(e).strip("'\""))
+        raise HTTPException(404, str(e).strip("'\"")) from e
     except IndexError as e:
-        raise HTTPException(422, str(e))
+        raise HTTPException(422, str(e)) from e
     return {"url": C().tryon.flatlay_url([i["id"] for i in items])}
 
 
@@ -756,7 +773,7 @@ def touch_example(play: str) -> FileResponse:
 
 @app.get("/api/renders/{name}.png")
 def render_file(name: str) -> FileResponse:
-    if not name.replace("-", "").isalnum():
+    if not SAFE_NAME.match(name.replace("-", "")):
         raise HTTPException(404, "No such render.")
     path = C().tryon.render_dir / f"{name}.png"
     if not path.exists():
@@ -878,7 +895,7 @@ async def connect_calendar_link(body: CalendarLinkIn) -> dict:
     try:
         count = await C().planning.connect_calendar(body.url)
     except FeedError as e:
-        raise HTTPException(422, str(e))
+        raise HTTPException(422, str(e)) from e
     today = C().planning.calendar(today_local())
     return {"events": count, "today": today["events"], "profile": _profile_out()}
 
@@ -893,7 +910,7 @@ def delete_calendar() -> dict:
 @app.get("/api/geocode")
 async def geocode(q: str) -> list[dict]:
     """City search for the weather location (Open-Meteo geocoding: free, no key)."""
-    q = q.strip()
+    q = q.strip()[:80]
     if len(q) < 2:
         return []
     if q.lower() in _geocode_cache:
@@ -905,9 +922,11 @@ async def geocode(q: str) -> list[dict]:
                                  params={"name": q, "count": 6, "language": "en", "format": "json"})
             r.raise_for_status()
     except httpx.HTTPError:
-        raise HTTPException(502, "City search is unavailable right now.")
+        raise HTTPException(502, "City search is unavailable right now.") from None
     out = [{"name": ", ".join(x for x in (g.get("name"), g.get("admin1"), g.get("country")) if x),
             "lat": round(g["latitude"], 4), "lon": round(g["longitude"], 4)} for g in r.json().get("results", [])]
+    if len(_geocode_cache) >= 500:  # a small cache, not a memory leak for anyone sending random queries
+        _geocode_cache.pop(next(iter(_geocode_cache)))
     _geocode_cache[q.lower()] = out
     return out
 
@@ -951,7 +970,7 @@ def correct_taste(body: CorrectIn) -> None:
     try:
         C().planning.correct_taste(body.feature, body.value)
     except KeyError as e:
-        raise HTTPException(404, str(e))
+        raise HTTPException(404, str(e)) from e
 
 
 @app.get("/api/taste/quiz")
@@ -994,7 +1013,7 @@ def style_board_piece(style: str, piece: str) -> FileResponse:
     """One cut-out piece of a style board: the same for everyone, so it caches for a week."""
     from .planning import STYLE_BOARDS
     path = STYLE_BOARDS / style / f"{piece}.webp"
-    if not (style.replace("_", "").isalnum() and piece.isalnum()) or not path.exists():
+    if not (SAFE_NAME.match(style.replace("_", "")) and SAFE_NAME.match(piece)) or not path.exists():
         raise HTTPException(404, "No such board piece.")
     return FileResponse(path, media_type="image/webp", headers={"Cache-Control": "public, max-age=604800"})
 
@@ -1020,9 +1039,9 @@ async def look_touches(plan_id: str, look: int = 0) -> dict:
     try:
         return await C().planning.touches(plan_id, look)
     except KeyError as e:
-        raise HTTPException(404, str(e).strip("'\""))
+        raise HTTPException(404, str(e).strip("'\"")) from e
     except IndexError as e:
-        raise HTTPException(422, str(e))
+        raise HTTPException(422, str(e)) from e
 
 
 @app.get("/api/oni")
@@ -1034,6 +1053,10 @@ def oni(day: date | None = None) -> dict:
 @app.post("/api/dev/seed")
 def seed(body: SeedIn) -> dict:
     """Import a spike run (out/<run>) as wardrobe items and fixtures. Local development only."""
+    # out/ holds the owner's real closet scans: on a server other people use (a testers' server on your
+    # laptop), anyone could otherwise import them. MONSTER_DEV=1 allows it for local tests.
+    if app.state.settings.per_device and os.environ.get("MONSTER_DEV") != "1":
+        raise HTTPException(404, "Not found.")
     out_root = (config.ROOT / "out").resolve()
     run_dir = (config.ROOT / body.run).resolve()
     if out_root not in run_dir.parents or not (run_dir / "cutouts").is_dir():

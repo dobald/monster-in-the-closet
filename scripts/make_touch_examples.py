@@ -38,9 +38,9 @@ PROMPTS: dict[str, str] = {
     "open_shirt": f"An unbuttoned light blue oxford shirt worn open like a light jacket over a white t-shirt, sleeves "
                   f"pushed up, {WORN}.",
     # techniques
-    "front_tuck": f"A loose cream t-shirt with only the front tucked into high-waisted wide-leg jeans, the back left "
-                  f"untucked, a belt just visible, display mannequin with a smooth featureless head, framed from the "
-                  f"chest to the knees.",
+    "front_tuck": "A loose cream t-shirt with only the front tucked into high-waisted wide-leg jeans, the back left "
+                  "untucked, a belt just visible, display mannequin with a smooth featureless head, framed from the "
+                  "chest to the knees.",
     "sleeve_push": f"A heather grey knit sweater with both sleeves clearly pushed up and bunched just below the elbows, "
                    f"the bare forearms and wrists showing, {WORN}.",
     "cuff_roll": "A display mannequin wearing straight-leg dark jeans and a tucked white t-shirt, framed from the waist "

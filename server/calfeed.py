@@ -60,6 +60,12 @@ async def fetch(url: str) -> bytes:
             await _check_host(urlsplit(url).hostname)
             try:
                 async with client.stream("GET", url) as r:
+                    # The name was checked above, but DNS can answer differently a moment later
+                    # (rebinding): check the address actually connected to before reading anything.
+                    stream = r.extensions.get("network_stream")
+                    peer = stream.get_extra_info("server_addr") if stream else None
+                    if peer and not ipaddress.ip_address(peer[0]).is_global:
+                        raise FeedError("That address isn't a public calendar.")
                     if r.is_redirect:
                         url = normalise(urljoin(url, r.headers.get("location", "")))
                         continue

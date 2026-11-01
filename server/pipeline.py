@@ -160,7 +160,7 @@ class Pipeline:
         unique = list({k["item_id"]: (src, k) for src, k in kept}.values())  # same cutout twice -> once
         tags = await asyncio.gather(*(self._tag(k["item_id"]) for _, k in unique))
         item_ids, new_ids = [], []
-        for (src, k), (garment, err) in zip(unique, tags):
+        for (src, k), (garment, err) in zip(unique, tags, strict=True):
             existed = self.store.get_item(k["item_id"]) is not None
             item_id = self.store.upsert_item(k["item_id"], scan_id, src, k.get("confidence"), garment, err)
             item_ids.append(item_id)

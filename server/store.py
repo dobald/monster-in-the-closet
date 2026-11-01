@@ -107,6 +107,10 @@ def now() -> str:
 
 
 class Store:
+    def close(self) -> None:
+        with self._lock:
+            self._db.close()
+
     def __init__(self, path: Path):
         self._db = sqlite3.connect(path, check_same_thread=False)
         self._db.row_factory = sqlite3.Row

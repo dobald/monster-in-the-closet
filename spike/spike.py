@@ -411,7 +411,7 @@ def write_summary(run_dir: Path) -> None:
         lines += [
             "## 1. Does segmentation hold up?",
             f"- Unique garments found: **{found}**" + (f" (you said there are {expected})" if expected else ""),
-            f"- Tracks per prompt: " + ", ".join(f"{p['prompt']}={p['tracks']}" for p in s["prompts"]),
+            "- Tracks per prompt: " + ", ".join(f"{p['prompt']}={p['tracks']}" for p in s["prompts"]),
             f"- Prompts that hit SAM's 16-objects-per-frame cap: {capped or 'none'}",
             f"- Mask placement mode(s): {s['mask_modes_seen']}  (check contact_sheet.png looks right)",
             f"- SAM frame size {s['sam_frame_size']} vs local {s['local_frame_size']}",

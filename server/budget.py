@@ -14,19 +14,23 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import threading
 from contextvars import ContextVar
 from datetime import datetime, timezone
 from pathlib import Path
 
-# Requests that may call a paid model. Everything else (reading the closet, wearing a look,
-# settings) is free and never counted.
-PAID = (
-    ("POST", "/api/scans"), ("POST", "/api/plan"), ("POST", "/api/occasions/plan"), ("POST", "/api/products"),
-    ("POST", "/api/tryon"), ("POST", "/api/gaps"), ("POST", "/api/thrift/example"), ("POST", "/api/checkins"),
-    ("POST", "/api/wardrobe/duplicates/check"), ("GET", "/api/taste"),
-    ("POST", "/api/plans"),  # wearing a look builds tomorrow's plan ahead
-)
+# Requests a user makes that can call a paid model. Everything else (reading the closet, settings,
+# the dress-up stack) is free and never counted. Follow-on work whose cost is bounded by these (product
+# shots and dress-up layers for scanned pieces, the taste summary, finishing touches, all cached) isn't
+# counted either, so browsing never uses up the day's budget.
+PAID = [re.compile(p) for p in (
+    r"^POST /api/scans$", r"^POST /api/plan$", r"^POST /api/occasions/plan$", r"^POST /api/gaps$",
+    r"^POST /api/thrift/example$", r"^POST /api/checkins$", r"^POST /api/wardrobe/duplicates/check$",
+    r"^POST /api/tryon$", r"^POST /api/tryon/photo$", r"^POST /api/tryon/layers$",
+    r"^POST /api/wardrobe/[^/]+/(retag|rescan)$",
+    r"^POST /api/plans/[^/]+/wear$",  # wearing a look builds tomorrow's plan ahead
+)]
 
 _over: ContextVar[bool] = ContextVar("over_budget", default=False)
 
@@ -92,7 +96,7 @@ class BudgetMiddleware:
         state = scope["app"].state if scope["type"] == "http" else None
         budget: Budget | None = getattr(state, "budget", None) if state else None
         if (budget is None or not budget.capped or state.settings.mode != "live"
-                or not any(scope["method"] == m and (scope["path"] == p or scope["path"].startswith(p + "/")) for m, p in PAID)):
+                or not any(p.match(f"{scope['method']} {scope['path']}") for p in PAID)):
             return await self.app(scope, receive, send)
         from .closets import current_id
         token = _over.set(not budget.spend(current_id()))

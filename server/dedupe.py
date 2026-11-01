@@ -75,7 +75,7 @@ class Dedupe:
                 x = gone[x]
             return x
 
-        ranked = sorted(zip(pairs, verdicts), key=lambda pv: -(pv[1].confidence if pv[1] and pv[1].same_item else 0))
+        ranked = sorted(zip(pairs, verdicts, strict=True), key=lambda pv: -(pv[1].confidence if pv[1] and pv[1].same_item else 0))
         for (a, b, _), v in ranked:
             ia, ib = canon(a["id"]), canon(b["id"])
             if ia == ib:

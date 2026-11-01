@@ -46,6 +46,9 @@ class Closet:
     layers: Layers
 
 
+UNUSED_AFTER_S = 10 * 60  # a closet with nothing scanned, untouched this long, can make room for a new visitor
+
+
 class ClosetsFull(RuntimeError):
     """MONSTER_MAX_CLOSETS closets exist already; a new device can't get one."""
 
@@ -75,7 +78,7 @@ class Closets:
             else:
                 if not ID_RE.match(closet_id):
                     raise ValueError("not a closet id")
-                if not (self.root / closet_id).is_dir() and self.count() >= self.max_closets:
+                if not (self.root / closet_id).is_dir() and self.count() >= self.max_closets and not self._evict_unused():
                     raise ClosetsFull(f"This demo is full ({self.max_closets} closets).")
                 s = replace(self.settings, var_dir=self.root / closet_id)
             settings_mod.prepare(s)
@@ -84,6 +87,36 @@ class Closets:
                        TryOn(s, self.cache, store), Layers(s, store))
             self._open[closet_id] = c
             return c
+
+    def _evict_unused(self) -> int:
+        """Delete closets nobody used: nothing scanned and untouched for UNUSED_AFTER_S. Any request without a
+        cookie (a bot, a health probe, a link preview) gets a fresh closet, so without this a few hundred stray
+        requests would fill the cap and turn every real new visitor away. Called with the lock held."""
+        import shutil
+        import sqlite3
+        import time
+        from contextlib import closing
+
+        gone = 0
+        for d in [p for p in self.root.glob("*") if p.is_dir()]:
+            if time.time() - d.stat().st_mtime < UNUSED_AFTER_S:
+                continue
+            db = d / "wardrobe.sqlite3"
+            try:
+                # closing(): a sqlite3 connection's own `with` only commits, and an open handle would stop
+                # the folder from being deleted on Windows.
+                with closing(sqlite3.connect(f"file:{db}?mode=ro", uri=True)) as con:
+                    used = con.execute("SELECT COUNT(*) FROM items").fetchone()[0] > 0
+            except sqlite3.Error:
+                used = False  # no database yet: never used
+            if used:
+                continue
+            opened = self._open.pop(d.name, None)
+            if opened:
+                opened.store.close()
+            shutil.rmtree(d, ignore_errors=True)
+            gone += not d.exists()  # only count what was really removed
+        return gone
 
     def count(self) -> int:
         return sum(1 for p in self.root.glob("*") if p.is_dir()) if self.root.exists() else 0

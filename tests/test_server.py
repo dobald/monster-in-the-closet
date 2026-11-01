@@ -482,7 +482,7 @@ def test_cut_layer() -> None:
 def test_agent_loop_and_repair() -> None:
     """plan_with_agent with a scripted client: it must call tools, then repair an invented id."""
     from types import SimpleNamespace as NS
-    from datetime import date as d, timedelta
+    from datetime import date as d
     from closet import planner
     from closet.schema import Look, OutfitPlan
 
@@ -598,6 +598,7 @@ def test_duplicates(var_dir: Path) -> None:
 def test_device_closets(var_dir: Path, run_dir: Path) -> None:
     """MONSTER_CLOSETS=device: two browsers never see each other's clothes, and a link moves one across."""
     os.environ["MONSTER_CLOSETS"] = "device"
+    os.environ["MONSTER_DEV"] = "1"  # dev seeding is off on shared servers unless asked for
     try:
         with client_for("fixture", var_dir) as a:
             b = TestClient(main.app)  # a second browser: its own cookie jar, the same running app
@@ -623,6 +624,7 @@ def test_device_closets(var_dir: Path, run_dir: Path) -> None:
             assert not (var_dir / "wardrobe.sqlite3").exists(), "device mode keeps nothing in the root closet"
     finally:
         os.environ.pop("MONSTER_CLOSETS", None)
+        os.environ.pop("MONSTER_DEV", None)
 
 
 def test_sample_closet_and_prebuild(var_dir: Path) -> None:
@@ -1009,10 +1011,10 @@ def test_deploy(var_dir: Path) -> None:
         with client_for("live", var_dir) as c:
             h = c.get("/api/health").json()
             assert h["mode"] == "live" and h["budget_left"] == 1, h
-            assert c.post("/api/products").json()["live"], "the first paid request runs live"
+            assert c.post("/api/products").json()["live"] and c.get("/api/health").json()["budget_left"] == 1, "browsing is free"
+            assert c.post("/api/plan").status_code == 409, "a paid request (an empty closet can't plan, but it counts)"
             h = c.get("/api/health").json()
             assert h["mode"] == "fixture" and h["budget_left"] == 0, h
-            assert not c.post("/api/products").json()["live"], "over the cap, a paid request runs as demo"
             assert c.post("/api/closet/new").status_code == 200
             assert c.get("/api/health").json()["budget_left"] == 1, "the cap is per closet"
             assert c.post("/api/plans/nope/wear", json={"look": 0}).status_code in (404, 422)
@@ -1141,7 +1143,7 @@ def test_corrections(var_dir: Path) -> None:
             first = c.post("/api/scans", files=[("photos", ("a.jpg", photo_bytes(1), "image/jpeg"))]).json()["items"]
             old = next(i for i in first if i["confidence"] == 0.9)
             assert old["tags"]["subtype"] == "dress", "the AI got it wrong"
-            assert c.post(f"/api/plans/x/wear", json={"look": 0}).status_code in (404, 422)
+            assert c.post("/api/plans/x/wear", json={"look": 0}).status_code in (404, 422)
             c.post("/api/wardrobe/last-worn", json={"items": [{"id": old["id"], "days_ago": 3}]})
 
             again = c.post(f"/api/wardrobe/{old['id']}/retag", json={"hint": "it's a zip-up hoodie, not a dress"}).json()
@@ -1155,6 +1157,66 @@ def test_corrections(var_dir: Path) -> None:
             assert c.get(f"/api/wardrobe/{old['id']}").status_code in (200, 404)
     finally:
         pipeline.scan.scan_image, pipeline.models.tag_garment, pipeline.config.async_client_for, products_mod.models._edit = orig
+
+
+
+def test_hardening(var_dir: Path) -> None:
+    """A public deploy shrugs off stray traffic, bad uploads and hostile calendars, and keeps photos private."""
+    import time
+    from datetime import date as d
+
+    from closet import tools
+    from server import budget
+
+    # Bots without a cookie can't fill the closet cap: unused closets make room once they're stale.
+    os.environ.update({"MONSTER_CLOSETS": "device", "MONSTER_MAX_CLOSETS": "3"})
+    try:
+        with client_for("fixture", var_dir / "public") as c:
+            closets = main.app.state.closets
+            assert c.post("/api/closet/sample").json()["imported"] == 9  # a real visitor, really using it
+            for _ in range(2):
+                assert TestClient(main.app).get("/api/health").status_code == 200  # a fresh client: no cookie
+            assert closets.count() == 3
+            assert TestClient(main.app).get("/api/health").status_code == 503, "full, and nothing is stale yet"
+            old = time.time() - 3600
+            for dir_ in closets.root.iterdir():
+                os.utime(dir_, (old, old))
+            assert TestClient(main.app).get("/api/health").status_code == 200, "stale unused closets made room"
+            assert len(c.get("/api/wardrobe").json()) == 9, "the closet with clothes in it was kept"
+
+            # Product shots live in one shared folder: only the owning closet can fetch one.
+            item = c.get("/api/wardrobe").json()[0]
+            shot = main.app.state.products.dir / f"{item['id']}.webp"
+            shot.write_bytes(b"RIFF0000WEBP")
+            assert c.get(f"/api/products/{item['id']}.webp").status_code == 200
+            assert TestClient(main.app).get(f"/api/products/{item['id']}.webp").status_code == 404, "another closet can't"
+            assert "private" in c.get(f"/api/cutouts/{item['id']}.png").headers["cache-control"]
+            assert c.get("/api/cutouts/%E2%91%A0.png").status_code == 404, "only ASCII names (isalnum() takes '①')"
+
+            assert c.post("/api/dev/seed", json={"run": "out/x"}).status_code == 404, "no dev seeding on a shared server"
+            assert "access-control-allow-origin" not in c.get("/api/ping", headers={"Origin": "https://evil.example"}).headers
+    finally:
+        for k in ("MONSTER_CLOSETS", "MONSTER_MAX_CLOSETS"):
+            os.environ.pop(k, None)
+
+    # Uploads that aren't photos are a clear 422, not a crash (live mode decodes them; demo mode replays).
+    with client_for("live", var_dir / "live") as c:
+        r = c.post("/api/scans", files=[("photos", ("x.jpg", b"not an image at all", "image/jpeg"))])
+        assert r.status_code == 422 and "isn't a photo" in r.json()["detail"], r.text
+
+    # The spend cap counts what can spend, and not browsing.
+    paid = lambda m, path: any(rx.match(f"{m} {path}") for rx in budget.PAID)  # noqa: E731
+    assert paid("POST", "/api/scans") and paid("POST", "/api/wardrobe/abc/rescan") and paid("POST", "/api/plans/x/wear")
+    assert not paid("POST", "/api/tryon/layers/stack") and not paid("GET", "/api/taste") and not paid("POST", "/api/products")
+    assert not paid("POST", "/api/plans") and paid("POST", "/api/plan")
+
+    # A calendar event repeating every minute is read once, not expanded 1,440 times.
+    stamp = d.today().strftime("%Y%m%d")
+    ics = ("BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:spam\r\nDTSTART:" + stamp + "T090000\r\n"
+           "RRULE:FREQ=MINUTELY\r\nSUMMARY:Spam\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n").encode()
+    t0 = time.time()
+    events = tools.ics_events(ics, d.today())
+    assert len(events) == 1 and time.time() - t0 < 2, (len(events), time.time() - t0)
 
 
 def main_() -> None:
@@ -1193,8 +1255,9 @@ def main_() -> None:
         test_layering(tmp / "layering")
         test_inside_labels()
         test_corrections(tmp / "corrections")
+        test_hardening(tmp / "hardening")
         print("OK: fixture mode, seeding, tag fixes, caching, dedupe, planning, wear, check-ins, the agent loop, gap finder, try-on, layered try-on, getting started, finishing touches, colour reads, "
-              "cross-photo duplicates, per-device closets, the sample closet, plans made ahead, the morning wear question, the taste model, outfit scoring, style archetypes, product shots, occasions, calendar links, the spend cap, app serving, layer occlusion and item corrections all behave.")
+              "cross-photo duplicates, per-device closets, the sample closet, plans made ahead, the morning wear question, the taste model, outfit scoring, style archetypes, product shots, occasions, calendar links, the spend cap, app serving, layer occlusion, item corrections and the public-deploy hardening all behave.")
     finally:
         shutil.rmtree(run_dir, ignore_errors=True)
         shutil.rmtree(tmp, ignore_errors=True)

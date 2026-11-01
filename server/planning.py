@@ -656,7 +656,7 @@ class Planning:
             return tuple(int(h[k:k + 2], 16) for k in (1, 3, 5))
 
         pal = [rgb(i) for i in outfit]
-        dist = lambda e: min(sum((x - y) ** 2 for x, y in zip(rgb(e), c)) for c in pal)  # noqa: E731
+        dist = lambda e: min(sum((x - y) ** 2 for x, y in zip(rgb(e), c, strict=True)) for c in pal)  # noqa: E731
         out = []
         for cat in ("shoes", "accessory"):
             mine = sorted((e for e in extras if e["tags"]["category"] == cat), key=dist)
