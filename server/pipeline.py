@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from PIL import Image
 
 from closet import config, media, models, scan
+from closet import dedupe as dedupe_mod
 from closet.schema import Garment
 
 from .cache import Cache, scan_key, sha256, tag_key
@@ -111,6 +112,42 @@ class Pipeline:
                 return None, f"{type(e).__name__}: {e}"[:300]
         self.cache.put("tags", key, garment.model_dump())
         return garment, None
+
+    # -- correcting one item: ask the tagger again, or replace its photo
+
+    async def retag(self, item_id: str, hint: str = "") -> None:
+        """Tag the item's cutout again, with the owner's hint if any. Kept as a user fix (later rescans keep it)."""
+        if not self.settings.live:
+            raise FixtureMissing("Asking again needs live mode (it calls Muse Spark). You can still fix the tags by hand.")
+        img = Image.open(self.settings.cutout_dir / f"{item_id}.png")
+        async with self._tag_gate:
+            garment = await asyncio.to_thread(models.tag_garment, img, None, hint)
+        self.store.update_tags(item_id, garment)
+
+    async def rescan(self, old_id: str, name: str, data: bytes) -> str:
+        """A new photo of one piece replaces its old cutout. The best garment SAM finds in the photo becomes
+        the item; the old item's wear history moves onto it. Returns the new item id."""
+        if not self.settings.live:
+            raise FixtureMissing("Rescanning needs live mode: in demo mode a photo replays a recorded scan.")
+        before = {i["id"] for i in self.store.list_items(include_hidden=True)}
+        res = await self._scan_photo(0, name, data)
+        if not res.kept:
+            raise ValueError("I couldn't find a garment in that photo. Lay just this piece flat on a plain floor and try again.")
+        cut = self.settings.cutout_dir
+        best = max(res.kept, key=lambda k: (k.get("confidence") or 0.5) * dedupe_mod.visible_area(cut / f"{k['item_id']}.png"))
+        for k in res.kept:  # other things in the photo aren't part of this fix
+            if k["item_id"] != best["item_id"] and k["item_id"] not in before:
+                (cut / f"{k['item_id']}.png").unlink(missing_ok=True)
+        garment, err = await self._tag(best["item_id"])
+        scan_id = uuid.uuid4().hex[:12]
+        # The store maps a cutout it has merged before onto the item it went into.
+        new_id = self.store.upsert_item(best["item_id"], scan_id, name, best.get("confidence"), garment, err)
+        if new_id == old_id:
+            return old_id
+        self.store.merge_items(new_id, old_id)
+        self.store.add_scan({"id": scan_id, "created_at": now(), "mode": self.settings.mode, "seconds": 0, "photos": 1,
+                             "cached_photos": int(res.cached), "replayed": False, "item_ids": [new_id], "dropped": []})
+        return new_id
 
     # -- the whole scan
 

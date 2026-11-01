@@ -463,6 +463,14 @@ export const api = {
   setLastWorn: (items: { id: string; days_ago: number | null }[]) =>
     call<Item[]>("/api/wardrobe/last-worn", json("POST", { items })),
   deleteItem: (id: string) => call<void>(`/api/wardrobe/${id}`, { method: "DELETE" }),
+  // Correcting a piece: fix its tags by hand, ask the tagger again (with a hint), or replace its photo.
+  fixItem: (id: string, changes: Partial<Tags>) => call<Item>(`/api/wardrobe/${id}`, json("PATCH", changes)),
+  retagItem: (id: string, hint: string) => call<Item>(`/api/wardrobe/${id}/retag`, json("POST", { hint })),
+  rescanItem: (id: string, photo: File) => {
+    const form = new FormData();
+    form.append("photo", photo, photo.name);
+    return call<Item>(`/api/wardrobe/${id}/rescan`, { method: "POST", body: form });
+  },
   findDuplicates: () => call<Duplicates>("/api/wardrobe/duplicates/check", { method: "POST" }),
   mergeItems: (a: string, b: string) => call<Item>("/api/wardrobe/duplicates/merge", json("POST", { a, b })),
   notDuplicates: (a: string, b: string) => call<void>("/api/wardrobe/duplicates/distinct", json("POST", { a, b })),

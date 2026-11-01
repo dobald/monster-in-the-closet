@@ -1089,6 +1089,74 @@ def test_layering(var_dir: Path) -> None:
         assert c.get(tee_url).status_code == 200
 
 
+
+def test_inside_labels() -> None:
+    """Inside labels the tagger noticed in a flat-lay never reach a render prompt; logos and prints do."""
+    from closet import models
+    from closet.schema import Garment, outside_details
+
+    assert outside_details("medium-wash faded denim, brand tag visible at waistband") == "medium-wash faded denim"
+    assert outside_details("front zip closure, drawstrings, white interior neck tag") == "front zip closure, drawstrings"
+    assert outside_details("small white CK monogram logo on left chest") == "small white CK monogram logo on left chest"
+    g = Garment.model_validate({**GARMENT, "distinctive_details": "two-button placket; small Uniqlo tag at back neck"})
+    line = g.render_line("#202020")
+    assert "two-button placket" in line and "tag" not in line.lower(), line
+    assert "never show them on the outside" in models.GARMENT_RULES
+
+
+
+def test_corrections(var_dir: Path) -> None:
+    """When the AI gets a piece wrong: fix it by hand, ask again with a hint, or rescan it with a new photo."""
+    from closet.schema import Garment
+    from server import pipeline, products as products_mod
+
+    with client_for("fixture", var_dir / "demo") as c:
+        c.post("/api/closet/sample")
+        item = c.get("/api/wardrobe").json()[0]
+        assert c.post(f"/api/wardrobe/{item['id']}/retag", json={"hint": "a hoodie"}).status_code == 409, "asking again needs live mode"
+        r = c.post(f"/api/wardrobe/{item['id']}/rescan", files={"photo": ("p.jpg", photo_bytes(5), "image/jpeg")})
+        assert r.status_code == 409 and "demo mode" in r.json()["detail"], "a demo replay must never replace a real piece"
+        fixed = c.patch(f"/api/wardrobe/{item['id']}", json={"subtype": "zip-up hoodie", "category": "outerwear"}).json()
+        assert fixed["user_edited"] and fixed["tags"]["subtype"] == "zip-up hoodie" and fixed["photo_url"] == item["photo_url"], fixed
+        assert c.patch(f"/api/wardrobe/{item['id']}", json={"is_garment": False}).status_code == 200
+        assert item["id"] not in {i["id"] for i in c.get("/api/wardrobe").json()}, "'not clothing' hides it"
+
+    seen = {}
+
+    def fake_tag(img, provider=None, hint=""):
+        seen["hint"] = hint
+        return Garment.model_validate({**GARMENT, "subtype": "zip-up hoodie" if hint else "dress", "category": "outerwear" if hint else "dress"})
+
+    async def fake_scan_image(client, photo, batch, source):
+        tone = photo.getpixel((10, 10))[0]
+        return [scan.ScanItem(source, batch, "0", (0, 0, 1, 1), 0.9, cutout_png((tone, 60, 60))),
+                scan.ScanItem(source, batch, "1", (0, 0, 1, 1), 0.5, cutout_png((tone, 200, 60), size=(40, 40)))]
+
+    orig = (pipeline.scan.scan_image, pipeline.models.tag_garment, pipeline.config.async_client_for, products_mod.models._edit)
+    pipeline.scan.scan_image, pipeline.models.tag_garment = fake_scan_image, fake_tag
+    pipeline.config.async_client_for = lambda provider="meta": None
+    products_mod.models._edit = lambda images, prompt: (None, "stubbed")
+    try:
+        with client_for("live", var_dir / "live") as c:
+            first = c.post("/api/scans", files=[("photos", ("a.jpg", photo_bytes(1), "image/jpeg"))]).json()["items"]
+            old = next(i for i in first if i["confidence"] == 0.9)
+            assert old["tags"]["subtype"] == "dress", "the AI got it wrong"
+            assert c.post(f"/api/plans/x/wear", json={"look": 0}).status_code in (404, 422)
+            c.post("/api/wardrobe/last-worn", json={"items": [{"id": old["id"], "days_ago": 3}]})
+
+            again = c.post(f"/api/wardrobe/{old['id']}/retag", json={"hint": "it's a zip-up hoodie, not a dress"}).json()
+            assert seen["hint"].startswith("it's a zip-up hoodie") and again["tags"]["category"] == "outerwear" and again["user_edited"], again
+
+            n_before = len(c.get("/api/wardrobe").json())
+            new = c.post(f"/api/wardrobe/{old['id']}/rescan", files={"photo": ("b.jpg", photo_bytes(30), "image/jpeg")}).json()
+            assert new["id"] != old["id"] and new["last_worn"] is not None, "the new photo takes over, wear history and all"
+            ids = {i["id"] for i in c.get("/api/wardrobe").json()}
+            assert old["id"] not in ids and new["id"] in ids and len(ids) == n_before, "one piece in, one out: the smaller find isn't added"
+            assert c.get(f"/api/wardrobe/{old['id']}").status_code in (200, 404)
+    finally:
+        pipeline.scan.scan_image, pipeline.models.tag_garment, pipeline.config.async_client_for, products_mod.models._edit = orig
+
+
 def main_() -> None:
     tmp = Path(tempfile.mkdtemp(prefix="monster-test-"))
     run_dir = config.ROOT / "out" / f"_test_seed_{tmp.name}"
@@ -1123,8 +1191,10 @@ def main_() -> None:
         test_occasions(tmp / "occasions")
         test_deploy(tmp / "deploy")
         test_layering(tmp / "layering")
+        test_inside_labels()
+        test_corrections(tmp / "corrections")
         print("OK: fixture mode, seeding, tag fixes, caching, dedupe, planning, wear, check-ins, the agent loop, gap finder, try-on, layered try-on, getting started, finishing touches, colour reads, "
-              "cross-photo duplicates, per-device closets, the sample closet, plans made ahead, the morning wear question, the taste model, outfit scoring, style archetypes, product shots, occasions, calendar links, the spend cap, app serving and layer occlusion all behave.")
+              "cross-photo duplicates, per-device closets, the sample closet, plans made ahead, the morning wear question, the taste model, outfit scoring, style archetypes, product shots, occasions, calendar links, the spend cap, app serving, layer occlusion and item corrections all behave.")
     finally:
         shutil.rmtree(run_dir, ignore_errors=True)
         shutil.rmtree(tmp, ignore_errors=True)

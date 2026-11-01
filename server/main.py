@@ -333,7 +333,62 @@ def fix_tags(item_id: str, changes: dict[str, Any]) -> ItemOut:
     except ValidationError as e:
         raise HTTPException(422, e.errors(include_url=False))
     store.update_tags(item_id, merged)
+    if VISUAL & set(changes):
+        _redraw(item_id)
     return _item_out(store.get_item(item_id))
+
+
+# Tag fields a picture depends on: changing one redraws the item's product shot and dress-up layer.
+VISUAL = {"category", "subtype", "primary_color", "secondary_colors", "pattern", "fit", "distinctive_details",
+          "visible_side", "print_side"}
+
+
+def _redraw(item_id: str) -> None:
+    """The item's pictures follow its corrected tags: product shot and dress-up layers are made again
+    (in the background, live mode). In demo mode the old pictures stay rather than vanish."""
+    if not app.state.settings.live:
+        return
+    app.state.products.forget(item_id)
+    C().layers.forget(item_id)
+    item = C().store.get_item(item_id)
+    if item:
+        app.state.products.start([item], C().settings.cutout_dir)
+
+
+class RetagIn(BaseModel):
+    hint: str = Field("", max_length=200)  # e.g. "it's a hoodie, not a dress"
+
+
+@app.post("/api/wardrobe/{item_id}/retag", response_model=ItemOut)
+async def retag_item(item_id: str, body: RetagIn) -> ItemOut:
+    """Ask the tagger again about this item's cutout, with the owner's hint. The result counts as a fix."""
+    if not C().store.get_item(item_id):
+        raise HTTPException(404, "No such item.")
+    try:
+        await C().pipeline.retag(item_id, body.hint)
+    except FixtureMissing as e:
+        raise HTTPException(409, str(e))
+    _redraw(item_id)
+    return _item_out(C().store.get_item(item_id))
+
+
+@app.post("/api/wardrobe/{item_id}/rescan", response_model=ItemOut)
+async def rescan_item(item_id: str, photo: UploadFile = File(..., description="One photo of just this piece, laid flat")) -> ItemOut:
+    """Replace a bad cutout with a new photo of the same piece. Its wear history carries over."""
+    if not C().store.get_item(item_id):
+        raise HTTPException(404, "No such item.")
+    data = await photo.read()
+    if len(data) > MAX_PHOTO_BYTES:
+        raise HTTPException(413, f"That photo is over {MAX_PHOTO_BYTES // 2**20} MB.")
+    try:
+        new_id = await C().pipeline.rescan(item_id, photo.filename or "rescan.jpg", data)
+    except FixtureMissing as e:
+        raise HTTPException(409, str(e))
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    if new_id != item_id:
+        app.state.products.start([C().store.get_item(new_id)], C().settings.cutout_dir)
+    return _item_out(C().store.get_item(new_id))
 
 
 @app.delete("/api/wardrobe/{item_id}", status_code=204)

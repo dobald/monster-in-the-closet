@@ -50,7 +50,8 @@ def prompt(tags: Garment, color_hex: str) -> str:
             f"{side} facing the camera, on a plain light grey background, shot from directly above in soft even light. "
             "Keep it faithful: the same colour, wash and fabric, the same cut, length and fit, and every print, "
             "graphic, text, stripe, pocket, button and seam that is on it. Add nothing that is not on the item and "
-            "remove nothing that is. No person, no hanger, no mannequin, no props, no shadows on the background. "
+            "remove nothing that is, except inside labels (care, size or brand tags), which stay out of sight. "
+            "No person, no hanger, no mannequin, no props, no shadows on the background. "
             f"Item: {tags.render_line(color_hex)}.")
 
 

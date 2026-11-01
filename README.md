@@ -84,7 +84,9 @@ Docs: http://127.0.0.1:8000/docs
 | `POST /api/scans` | 1–10 flat-lay photos (JPEG/PNG/WebP/HEIC) → cutouts → tags → wardrobe |
 | `GET /api/scans/{id}` | A past scan and its items |
 | `GET /api/wardrobe` | Garments; filter with `?category=top`, `?include_hidden=true` |
-| `GET` / `PATCH` / `DELETE /api/wardrobe/{id}` | One item; `PATCH` is "Fix tags", and later rescans keep those fixes |
+| `GET` / `PATCH` / `DELETE /api/wardrobe/{id}` | One item; `PATCH` is **Fix it** (later rescans keep those fixes; `is_garment: false` hides a non-garment) |
+| `POST /api/wardrobe/{id}/retag` | **Ask again**: `{hint}` ("it's a hoodie, not a dress"). Muse Spark re-tags the same cutout and trusts the hint about what it is (live mode) |
+| `POST /api/wardrobe/{id}/rescan` | **Rescan photo**: one new photo of just this piece. SAM's best find replaces the old cutout and the wear history moves over (live mode; demo replays never replace a real piece) |
 | `GET /api/cutouts/{id}.png` | The garment cutout |
 | `GET` / `POST /api/products` | Product shots: how many are done or being made; `POST` starts any missing (live mode) |
 | `GET /api/products/{id}.webp` | One item's clean product shot |
@@ -96,6 +98,13 @@ Docs: http://127.0.0.1:8000/docs
 - **Fixture mode.** It serves only recorded results. An unseen photo replays a recorded scan, so front-end work never spends credits.
 - **No duplicates.** Item ids are hashes of the cutout, so the same garment scanned twice is stored once. Wear history and tag fixes survive a rescan.
 - **Local data stays local.** The database, cutouts and cache live in `var/`, which git ignores.
+
+**When the AI gets a piece wrong.** The item sheet has a **Wrong? · 直す** row with three fixes:
+- **Fix it:** edit the name, type, colour, fit, pattern, how dressy, warmth, seasons and details, or mark it as not clothing.
+- **Ask again:** Muse Spark looks at the same cutout once more, optionally with a hint.
+- **Rescan photo:** for a bad cutout (two things merged, half missing). Lay just that piece flat and take one photo.
+
+After a fix that changes how the piece looks, its product shot and dress-up layer are made again, so every picture follows the corrected tags.
 
 **Same garment, different photos.** Item ids hash the cutout, so one hoodie shot in two batches used to become two items. Every scan, and the Closet's "Find duplicates" button, now runs a cross-photo check:
 1. **Shortlist pairs cheaply:** compatible categories and a close measured colour (ΔE ≤ 20). Two pieces cut from the same photo are never paired, since SAM already separated them. On the real 11-item test closet this left 13 pairs.

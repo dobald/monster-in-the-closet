@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
@@ -55,8 +56,9 @@ class Garment(BaseModel):
             parts.append(f"exact colour {color_hex}, do not lighten, fade or recolour it")
         if self.pattern != "solid":
             parts.append(f"pattern: {self.pattern}")
-        if not short and self.distinctive_details and self.distinctive_details.lower() != "none":
-            parts.append(f"details to keep exactly: {self.distinctive_details}")
+        details = outside_details(self.distinctive_details)
+        if not short and details:
+            parts.append(f"details to keep exactly: {details}")
         if self.print_side in ("front", "back"):
             parts.append(f"the main print is on the {self.print_side}")
         return "; ".join(parts)
@@ -66,6 +68,20 @@ class Garment(BaseModel):
     def _dedupe(cls, v: list) -> list:
         # Muse Spark Open occasionally repeats list items ("summer", "summer").
         return list(dict.fromkeys(v))
+
+
+# Inside labels (care, size and brand tags at the neck or waistband) show up in flat-lay scans and the
+# tagger notes them, but they're never seen when the garment is worn: a render told to "keep" them
+# paints a white tag on the outside of the sweatshirt. Logos and printed text are kept.
+_LABEL = re.compile(r"\b(tags?|labels?|care instructions?|size sticker)\b", re.I)
+
+
+def outside_details(details: str) -> str:
+    """The distinctive details someone sees when the garment is worn: inside labels dropped."""
+    if not details or details.strip().lower() == "none":
+        return ""
+    keep = [p.strip() for p in re.split(r"[,;]", details) if p.strip() and not _LABEL.search(p)]
+    return ", ".join(keep)
 
 
 Build = Literal["slim", "regular", "athletic", "curvy", "plus"]

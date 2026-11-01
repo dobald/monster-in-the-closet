@@ -162,6 +162,12 @@ class Layers:
         note = None if self.settings.live else "Layers are made in live mode; showing the ones already made."
         return {"base_key": key, "base": base, "layers": layers, "live": self.settings.live, "note": note}
 
+    def forget(self, item_id: str) -> None:
+        """Drop an item's layer on every mannequin (its tags changed), so it is dressed again."""
+        for base in (d for d in self.root.iterdir() if d.is_dir()):
+            for f in [base / f"{item_id}.png", base / f"{item_id}.json", *base.glob(f"{item_id}u*.png")]:
+                f.unlink(missing_ok=True)
+
     def stack(self, body: dict, item_ids: list[str]) -> dict:
         """The pieces on the mannequin right now, bottom first: each one's URL (cut back to what the layers
         over it don't hide) and its stacking order. Only ready layers are included."""
@@ -180,7 +186,9 @@ class Layers:
 
     def _cut_back(self, key: str, inner: dict, over: list[dict]) -> str:
         """The inner layer with what the garments over it hide taken out (closet/layering.occlude)."""
-        tag = sha256(json.dumps([OCCLUDE_VERSION, sorted(o["id"] for o in over)]).encode())[:10]
+        # Keyed on the layer files themselves, so a garment dressed again never reuses an old cut-back.
+        files = [self.root / key / f"{i}.png" for i in [inner["id"], *sorted(o["id"] for o in over)]]
+        tag = sha256(json.dumps([OCCLUDE_VERSION, [(f.name, f.stat().st_mtime_ns) for f in files]]).encode())[:10]
         name = f"{inner['id']}u{tag}"
         path = self.root / key / f"{name}.png"
         if not path.exists():

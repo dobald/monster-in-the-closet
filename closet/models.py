@@ -30,12 +30,14 @@ TAG_INSTRUCTIONS = (
     "a single wearable item (a hanger, furniture, two items merged, or too blurry), set "
     "is_garment=false and lower confidence. Describe the fit as it really is (a loose, "
     "wide-leg pair of jeans must not be called slim), and say which side faces the camera: "
-    "flat-lays are often shot back-up, and prints are often on the back."
+    "flat-lays are often shot back-up, and prints are often on the back. Leave inside labels (care, "
+    "size or brand tags at the neck or waistband) out of distinctive_details: nobody sees them when "
+    "the garment is worn."
 )
 
 
-def tag_garment(cutout: Image.Image, provider: str | None = None) -> Garment:
-    """Structured tags for one cutout.
+def tag_garment(cutout: Image.Image, provider: str | None = None, hint: str = "") -> Garment:
+    """Structured tags for one cutout. `hint` is the owner's correction ("it's a hoodie, not a dress").
 
     Meta: Responses API with text_format (the documented image path).
     Baseten: Chat Completions with response_format, the OpenAI-compatible surface it serves.
@@ -44,6 +46,10 @@ def tag_garment(cutout: Image.Image, provider: str | None = None) -> Garment:
     client = config.client_for(provider)
     model = config.TAG_MODEL[provider]
     image_url = to_data_url(on_white(cutout))
+    ask = "Tag this item."
+    if hint.strip():
+        ask += (f" The owner says: \"{hint.strip()[:200]}\". Trust them about what the item is; describe "
+                "everything else from the image.")
 
     if provider == "meta":
         resp = client.responses.parse(
@@ -52,7 +58,7 @@ def tag_garment(cutout: Image.Image, provider: str | None = None) -> Garment:
             input=[{
                 "role": "user",
                 "content": [
-                    {"type": "input_text", "text": "Tag this item."},
+                    {"type": "input_text", "text": ask},
                     {"type": "input_image", "image_url": image_url},
                 ],
             }],
@@ -66,7 +72,7 @@ def tag_garment(cutout: Image.Image, provider: str | None = None) -> Garment:
         messages=[
             {"role": "system", "content": TAG_INSTRUCTIONS},
             {"role": "user", "content": [
-                {"type": "text", "text": "Tag this item."},
+                {"type": "text", "text": ask},
                 {"type": "image_url", "image_url": {"url": image_url}},
             ]},
         ],
@@ -81,7 +87,9 @@ def tag_garment(cutout: Image.Image, provider: str | None = None) -> Garment:
 
 GARMENT_RULES = (
     "Preserve every garment's color, pattern, logos, prints and cut precisely; "
-    "do not invent, add or restyle details. Full-body, neutral studio background."
+    "do not invent, add or restyle details. Inside labels (care, size and brand tags at the neck, "
+    "waistband or side seam) are inside the garment and hidden when it's worn: never show them on the "
+    "outside. Full-body, neutral studio background."
 )
 
 
@@ -330,6 +338,9 @@ def judge_render(
             "details that only exist on the other side; mark view_explains_hidden_details. If it shows a different "
             "side than requested and that hides a print or logo the item image shows, score details 2 or less: "
             "the user would not see their print. Judge the wearer separately in `subject`. "
+            "Inside labels (care, size or brand tags at the neck or waistband) are hidden when a garment is worn: "
+            "never ask for one, and if the render shows a label on the outside of a garment, list it as a "
+            "difference to remove. "
             "Write differences as instructions a renderer could act on (e.g. 'jeans should be darker indigo and "
             "wide-leg, not slim')."
         ),
