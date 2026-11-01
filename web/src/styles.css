@@ -80,6 +80,7 @@ img { display: block; max-width: 100%; }
   margin: 0 auto;
   background: var(--washi);
   overflow-x: hidden;
+  overflow-x: clip; /* not even a scroll-into-view or a sideways swipe can shift the page */
 }
 @media (min-width: 480px) {
   .app { border-left: var(--line); border-right: var(--line); }

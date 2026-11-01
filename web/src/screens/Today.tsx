@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api, ApiError, idleDays, itemName, shortName, type Item, type Look, type Mood, type Plan, type WeatherPart } from "../api";
 import type { AppCtx } from "../App";
 import Oni, { MOOD_LABEL } from "../Oni";
+import { useSwipe } from "../swipe";
 import { ComingUp } from "./Occasions";
 import TraceSheet from "./Trace";
 import Touches from "./Touches";
@@ -80,6 +81,10 @@ export default function Today({ ctx }: { ctx: AppCtx }) {
 
   const now = new Date();
   const look = plan?.looks[lookIndex];
+  // Swipe (or ‹ ›) between looks; it wraps around.
+  const looks = plan?.looks.length ?? 0;
+  const step = (d: number) => looks > 1 && load.state === "ready" && setLookIndex((lookIndex + d + looks) % looks);
+  const swipe = useSwipe(() => step(1), () => step(-1));
   const stretch = plan?.trace.stretch?.look === lookIndex; // one step outside the comfort zone, picked by the taste model
   const fit = plan?.trace.taste?.fit[lookIndex];
   const mood = ctx.oni?.mood ?? "calm";
@@ -177,18 +182,16 @@ export default function Today({ ctx }: { ctx: AppCtx }) {
               <span className="label" style={{ fontSize: 11, whiteSpace: "nowrap", color: stretch ? "var(--shu)" : undefined }}>
                 {stretch ? "STRETCH" : lookIndex === 0 ? "TODAY'S PICK" : "ALSO GOOD"} · LOOK {LOOK_LETTERS[lookIndex]}
               </span>
-              {plan && (
-                <span className="label" style={{ fontWeight: 400, fontSize: 11 }}>
-                  {lookIndex + 1} / {plan.looks.length}
-                </span>
-              )}
+              {plan && looks > 1 && <LookDots n={looks} at={lookIndex} onPick={setLookIndex} />}
             </div>
 
             {load.state !== "ready" || !look ? (
               <Thinking slow={load.state === "thinking" && ctx.health?.mode === "live"} full={full} />
             ) : (
               <>
-                <Collage key={plan!.id + lookIndex} items={look.items} onOpen={ctx.openItem} onTryOn={() => ctx.openTryOn(plan!, lookIndex)} />
+                <div {...swipe}>
+                  <Collage key={plan!.id + lookIndex} items={look.items} onOpen={ctx.openItem} onTryOn={() => ctx.openTryOn(plan!, lookIndex)} />
+                </div>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
                   <h2 className="display" style={{ fontSize: 22, lineHeight: 1.05 }}>{look.name}</h2>
                   {fit !== undefined && !!plan!.trace.taste?.n && (
@@ -206,7 +209,11 @@ export default function Today({ ctx }: { ctx: AppCtx }) {
               </>
             )}
 
-            <div style={{ display: "flex", gap: 10, paddingRight: 3 }}>
+            <div style={{ display: "flex", gap: 8, paddingRight: 3 }}>
+              <button type="button" className="btn press" aria-label="Previous look" style={{ flex: "none", width: 52, padding: 0 }}
+                disabled={looks < 2 || load.state !== "ready"} onClick={() => step(-1)}>
+                ‹
+              </button>
               {wornLook === lookIndex ? (
                 <button type="button" className="btn primary press" style={{ flex: 1.2 }} onClick={() => ctx.openCheckin(plan, lookIndex)}>
                   Worn ✓ · Check in →
@@ -216,16 +223,20 @@ export default function Today({ ctx }: { ctx: AppCtx }) {
                   {wearing ? "Logging…" : "Wear this →"}
                 </button>
               )}
-              <button
-                type="button"
-                className="btn press"
-                style={{ flex: 1 }}
-                disabled={!plan || plan.looks.length < 2 || load.state !== "ready"}
-                onClick={() => plan && setLookIndex((lookIndex + 1) % plan.looks.length)}
-              >
-                Next look ⇄
+              <button type="button" className="btn press" aria-label="Next look" style={{ flex: "none", width: 52, padding: 0 }}
+                disabled={looks < 2 || load.state !== "ready"} onClick={() => step(1)}>
+                ›
               </button>
             </div>
+            {load.state === "ready" && looks > 1 && (
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: -4 }}>
+                <span className="label" style={{ fontWeight: 400, fontSize: 10 }}>SWIPE FOR MORE LOOKS ⇆</span>
+                <button type="button" className="chip press" style={{ height: 28, fontSize: 12 }} onClick={() => replan(plan?.notes ?? "", true)}
+                  aria-label="Ask the oni for new picks">
+                  ↻ New picks
+                </button>
+              </div>
+            )}
 
             {!full && load.state === "ready" && look && (
               <button
@@ -306,6 +317,25 @@ export default function Today({ ctx }: { ctx: AppCtx }) {
 }
 
 // ------------------------------------------------------------------ pieces
+
+export function LookDots({ n, at, onPick }: { n: number; at: number; onPick: (i: number) => void }) {
+  return (
+    <span role="tablist" aria-label="Looks" style={{ display: "flex", alignItems: "center", gap: 5 }}>
+      {Array.from({ length: n }, (_, i) => (
+        <button
+          key={i}
+          type="button"
+          role="tab"
+          aria-selected={i === at}
+          aria-label={`Look ${"ABC"[i] ?? i + 1}`}
+          onClick={() => onPick(i)}
+          style={{ width: i === at ? 18 : 8, height: 8, borderRadius: 4, border: "var(--line)", padding: 0, background: i === at ? "var(--sumi)" : "transparent", transition: "width .2s" }}
+        />
+      ))}
+    </span>
+  );
+}
+
 
 // The morning question: one tap instead of logging every wear. Asked once about yesterday's pick,
 // only when it was shown and nothing was logged. "Yes" counts the wear (and any rescue).

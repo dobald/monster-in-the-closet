@@ -36,6 +36,11 @@ class Products:
     def url(self, item_id: str) -> str | None:
         return f"/api/products/{item_id}.webp" if (self.dir / f"{item_id}.webp").exists() else None
 
+    def use_scan(self, item_id: str) -> None:
+        """The owner prefers their own scan to the redraw (it lost a detail, say): never redraw it on its own again."""
+        self.forget(item_id)
+        self._note(item_id, ok=False, reason="the owner chose their scan")
+
     def forget(self, item_id: str) -> None:
         """Drop an item's product shot (its tags changed), so the next start() makes a new one."""
         for ext in ("webp", "json"):
@@ -77,23 +82,33 @@ class Products:
         try:
             tags = Garment.model_validate(item["tags"])
             cutout = Image.open(cutout_path).convert("RGBA")
-            async with self._gate:
-                drawn, status = await asyncio.to_thread(
-                    models._edit, [media.on_white(cutout)], products.prompt(tags, media.dominant_color(cutout)))
-                if drawn is None:
-                    return self._note(item_id, ok=False, reason=status)
-                client = config.async_client_for("meta")
-                shot = None
-                for noun in products.nouns(tags):
-                    if shot := await products.cut(client, drawn, noun, tags.category in OPEN_SHAPES):
-                        break
-            if shot is None:
-                return self._note(item_id, ok=False, reason=f"SAM found no {tags.subtype}")
-            drift = products.colour_drift(cutout, shot)
-            if drift > products.MAX_DELTA_E:
-                return self._note(item_id, ok=False, reason=f"colour drifted (ΔE {drift:.1f})", drift=round(drift, 1))
+            prompt = products.prompt(tags, media.dominant_color(cutout))
+            shot, check = None, None
+            for attempt in range(2):  # a redraw that lost a detail gets one more go, told what it lost
+                async with self._gate:
+                    drawn, status = await asyncio.to_thread(models._edit, [media.on_white(cutout)], prompt)
+                    if drawn is None:
+                        return self._note(item_id, ok=False, reason=status)
+                    client = config.async_client_for("meta")
+                    shot = None
+                    for noun in products.nouns(tags):
+                        if shot := await products.cut(client, drawn, noun, tags.category in OPEN_SHAPES):
+                            break
+                if shot is None:
+                    return self._note(item_id, ok=False, reason=f"SAM found no {tags.subtype}")
+                drift = products.colour_drift(cutout, shot)
+                if drift > products.MAX_DELTA_E:
+                    return self._note(item_id, ok=False, reason=f"colour drifted (ΔE {drift:.1f})", drift=round(drift, 1))
+                check = await asyncio.to_thread(products.check_details, cutout, shot, tags)
+                if check.same_garment and not check.missing_details:
+                    break
+                prompt = (products.prompt(tags, media.dominant_color(cutout)) + " The last redraw lost these details of the "
+                          "real item; they must be there this time: " + "; ".join(check.missing_details or [check.real_details]) + ".")
+            if check and (not check.same_garment or check.missing_details):
+                return self._note(item_id, ok=False, drift=round(drift, 1),
+                                  reason="lost details: " + "; ".join(check.missing_details or ["not the same garment"])[:200])
             shot.thumbnail((EDGE, EDGE))
             shot.save(self.dir / f"{item_id}.webp", format="WEBP", quality=85, method=6)
-            self._note(item_id, ok=True, drift=round(drift, 1))
+            self._note(item_id, ok=True, drift=round(drift, 1), details=check.real_details[:300] if check else None)
         except (Exception, SystemExit) as e:  # noqa: BLE001  one bad item (or a missing API key) shouldn't stop the rest
             self._note(item_id, ok=False, reason=f"{type(e).__name__}: {e}"[:300])

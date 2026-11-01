@@ -24,6 +24,40 @@ export default function Closet({ ctx }: { ctx: AppCtx }) {
   const [checking, setChecking] = useState(false);
   const [review, setReview] = useState<DuplicatePair[]>([]);
   const [history, setHistory] = useState(false);
+  // Select mode: tick several pieces (bad scans, things that aren't yours) and remove them in one go.
+  const [picked, setPicked] = useState<Set<string> | null>(null);
+  const [confirmRemove, setConfirmRemove] = useState(false);
+
+  const removePicked = async () => {
+    if (!picked?.size) return;
+    try {
+      const ids = [...picked];
+      await Promise.all(ids.map((id) => api.deleteItem(id)));
+      ctx.toast(`Removed ${ids.length} piece${ids.length === 1 ? "" : "s"}.`, {
+        label: "Undo",
+        run: () =>
+          Promise.all(ids.map((id) => api.restoreItem(id)))
+            .then(() => ctx.bumpWardrobe())
+            .catch((e) => ctx.toast((e as Error).message)),
+      });
+      setPicked(null);
+      ctx.bumpWardrobe();
+    } catch (e) {
+      ctx.toast((e as Error).message);
+    } finally {
+      setConfirmRemove(false);
+    }
+  };
+
+  const removeSample = async () => {
+    try {
+      const r = await api.removeSample();
+      ctx.toast(`Took out the ${r.removed} sample pieces.`);
+      ctx.bumpWardrobe();
+    } catch (e) {
+      ctx.toast((e as Error).message);
+    }
+  };
 
   const findDuplicates = async () => {
     setChecking(true);
@@ -106,6 +140,19 @@ export default function Closet({ ctx }: { ctx: AppCtx }) {
             >
               {checking ? "Checking…" : "Find duplicates ⧉"}
             </button>
+            <button
+              type="button"
+              className="chip press"
+              aria-pressed={!!picked}
+              style={{ height: 28, padding: "0 10px", fontSize: 12 }}
+              disabled={!items?.length}
+              onClick={() => {
+                setPicked(picked ? null : new Set());
+                setConfirmRemove(false);
+              }}
+            >
+              {picked ? "Done" : "Select"}
+            </button>
           </span>
         </div>
         <span lang="ja" aria-hidden="true" className="vertical" style={{ fontSize: 22 }}>
@@ -138,6 +185,33 @@ export default function Closet({ ctx }: { ctx: AppCtx }) {
       </div>
 
       <ReviewPairs pairs={review} ctx={ctx} onResolved={(p) => setReview(review.filter((x) => x !== p))} />
+
+      {items?.some((i) => i.source === "sample closet") && (
+        <div className="card" style={{ padding: "10px 12px", display: "flex", alignItems: "center", gap: 10 }}>
+          <span className="small" style={{ flex: 1 }}>
+            <strong>This is the sample closet.</strong> Scanning your own clothes replaces it, or take it out now.
+          </span>
+          <button type="button" className="chip press" style={{ flex: "none" }} onClick={removeSample}>Remove sample</button>
+        </div>
+      )}
+
+      {picked && (
+        <div className="card" style={{ position: "sticky", top: 8, zIndex: 5, padding: "10px 12px", display: "flex", alignItems: "center", gap: 10, boxShadow: "3px 3px 0 var(--shu)" }}>
+          <span className="small" style={{ flex: 1 }}>
+            {picked.size ? `${picked.size} selected` : "Tap the pieces to remove: bad scans, things that aren't yours."}
+          </span>
+          {confirmRemove ? (
+            <>
+              <button type="button" className="chip press" onClick={() => setConfirmRemove(false)}>Keep</button>
+              <button type="button" className="chip shu press" onClick={removePicked}>Yes, remove</button>
+            </>
+          ) : (
+            <button type="button" className="chip shu press" disabled={!picked.size} onClick={() => setConfirmRemove(true)}>
+              Remove {picked.size || ""}
+            </button>
+          )}
+        </div>
+      )}
 
       {items && noHistory >= 2 && noHistory * 3 >= items.length && (
         <button
@@ -201,7 +275,15 @@ export default function Closet({ ctx }: { ctx: AppCtx }) {
             <button
               key={it.id}
               type="button"
-              onClick={() => ctx.openItem(it)}
+              aria-pressed={picked ? picked.has(it.id) : undefined}
+              onClick={() => {
+                if (!picked) return ctx.openItem(it);
+                const next = new Set(picked);
+                if (next.has(it.id)) next.delete(it.id);
+                else next.add(it.id);
+                setPicked(next);
+                setConfirmRemove(false);
+              }}
               style={{
                 display: "flex",
                 flexDirection: "column",
@@ -216,6 +298,18 @@ export default function Closet({ ctx }: { ctx: AppCtx }) {
             >
               <span className="halftone" style={{ position: "relative", display: "block", width: "100%", aspectRatio: "1", border: "var(--line)", borderRadius: 8, padding: 6 }}>
                 <img className="cutout" src={it.photo_url} alt="" loading="lazy" />
+                {picked && (
+                  <span
+                    aria-hidden="true"
+                    style={{
+                      position: "absolute", top: 6, right: 6, width: 24, height: 24, borderRadius: 12, border: "var(--line)",
+                      display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 700, fontSize: 13,
+                      background: picked.has(it.id) ? "var(--shu)" : "var(--washi)", color: picked.has(it.id) ? "#fff" : "transparent",
+                    }}
+                  >
+                    ✓
+                  </span>
+                )}
                 {idle >= 30 && (
                   <span className="sticker" style={{ position: "absolute", top: 6, left: 4, animation: "wobble 3s ease-in-out infinite" }}>
                     {idle}日

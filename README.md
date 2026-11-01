@@ -99,6 +99,36 @@ Docs: http://127.0.0.1:8000/docs
 - **No duplicates.** Item ids are hashes of the cutout, so the same garment scanned twice is stored once. Wear history and tag fixes survive a rescan.
 - **Local data stays local.** The database, cutouts and cache live in `var/`, which git ignores.
 
+**Telling a top from a bandana: shape, not just colour (`closet/scan.py`).** A vision model can be fooled by colour and print, and a folded tee photographed flat can read as a square bandana. Every new cutout's outline is measured, and the measurements go to Muse Spark with the image:
+- **How much of its convex hull it fills.** Sleeves, armholes and trouser legs cut notches: tops and trousers fill 60–90%, a flat square or triangle of fabric 95%+.
+- **How tall it is next to its width.**
+- **Its size next to the largest piece in the same photo.**
+
+The tagging instructions also decide the type from construction (neck opening and armholes, a waistband with two leg openings, a flat piece with no openings). They say to give a confidence under 0.6 when unsure, and scan results mark those pieces **CHECK?**
+
+**Scanning, step by step.**
+- **How-to guide.** Setup and the Scan tab open with a guide: a "do" and a "don't" example photo (`scripts/make_scan_guide.py`, Muse Image) and four steps. On the Scan tab it folds away after the first scan.
+- **Two clear buttons.** **Take a photo** opens the camera; **Choose photos** picks several.
+- **Results.** Results say "Tap a piece to fix what it is; ✕ removes a bad cut-out".
+- **Removing several pieces.** The Closet tab has **Select** to remove several pieces at once. Removing a piece removes its wear history too.
+- **The sample closet makes way.** The first real scan takes the sample closet's made-up pieces out, so they never mix into someone's plans. The Closet tab also has a **Remove sample** button.
+
+**Light on light, removing and undoing, and lost details.**
+- **Low-contrast photos.** SAM gets a copy of each photo with boosted local contrast (CLAHE on the lightness channel, `media.for_segmentation`). That brings out the folds and seams of a white tee on a white sheet. The cutout is still cut from the original photo.
+- **A warning when it's still hard.** A piece whose measured colour is within ΔE 14 of the background (read from the photo's edges) gets a note: light clothes scan best on a darker floor.
+- **Undo.** Removing pieces (one, or several with **Select** in the scan results or the Closet tab) hides them at once, and the toast offers **Undo**. They're deleted for good, with their wear history and cutout, after two days.
+- **Details kept in product shots.** The tagger records structure like ruffles, frills, tiers, an attached skirt or peplum, lace and smocking, and the redraw prompt keeps them. Muse Spark then compares each redraw with the scan (`products.check_details`):
+  - **Retry:** if a defining detail is missing, it redraws once with that detail named.
+  - **Fallback:** if it's still missing, the app shows your scan.
+
+  The item sheet also has **Use my scan** and **Redraw**.
+
+**Looks you can swipe.** On Today and in the occasion sheet you can:
+- **swipe** between looks, or use **‹ ›**, with dots showing which look you're on;
+- ask for **↻ New picks** at any time.
+
+The this-or-that boards have **↶ Undo last pick**. "Something else coming up" uses buttons for the day and the time of day (morning, afternoon, evening, all day) and indoors or outside, and has **‹ Change details** after planning.
+
 **When the AI gets a piece wrong.** The item sheet has a **Wrong? · 直す** row with three fixes:
 - **Fix it:** edit the name, type, colour, fit, pattern, how dressy, warmth, seasons and details, or mark it as not clothing.
 - **Ask again:** Muse Spark looks at the same cutout once more, optionally with a hint.
@@ -471,7 +501,22 @@ These requests are scans, plans, occasion plans, product shots, try-on, the gap 
 
 ## Testing on your phone
 
-The phone and the computer must be on the same Wi-Fi.
+**Testers anywhere (a link that works off your Wi-Fi).** Your laptop serves a testers' copy of the app, and a Cloudflare quick tunnel gives it a public `https://` address. There's no account, and nothing is exposed but this one port.
+
+```bash
+cd web && npm run build && cd ..                                         # the API serves the built app
+python -m server.dev --live --public --var var/testers --port 8100      # or the "testers-public" launch config
+cloudflared tunnel --no-autoupdate --url http://localhost:8100          # prints https://<words>.trycloudflare.com
+```
+
+What `--public` sets up:
+- **A separate copy:** one closet per browser, in `var/testers`, apart from your own closet.
+- **Spend caps:** 300 paid requests a day for the server and 25 per closet, then demo mode.
+- **One port:** the API serves the built app itself, so the tunnel only exposes 8100.
+
+The link works only while the laptop is awake and both commands run, and it changes each time the tunnel restarts. For a permanent link, deploy (see **Deploy**). The free `localhost.run` tunnel did not work: its HTTPS handshake failed from outside, and some home networks redirect its domain to a warning page.
+
+**On the same Wi-Fi.** The phone and the computer must be on the same Wi-Fi.
 
 **When friends test, give everyone their own closet.** By default there is one closet for whoever opens the app. With `--devices`, every browser gets its own:
 

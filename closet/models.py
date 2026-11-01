@@ -30,13 +30,21 @@ TAG_INSTRUCTIONS = (
     "a single wearable item (a hanger, furniture, two items merged, or too blurry), set "
     "is_garment=false and lower confidence. Describe the fit as it really is (a loose, "
     "wide-leg pair of jeans must not be called slim), and say which side faces the camera: "
-    "flat-lays are often shot back-up, and prints are often on the back. Leave inside labels (care, "
+    "flat-lays are often shot back-up, and prints are often on the back. Decide what the item is from its "
+    "construction, not its colour or print: a neck opening with armholes or sleeves is a top (or outerwear if it "
+    "opens down the front); a waistband with two leg openings is a bottom; one long body with a neck opening is a "
+    "dress; a flat square, rectangle or triangle of fabric with no openings is a bandana or scarf (accessory). A "
+    "folded or crumpled top can look like a square: if any sleeve, armhole, hem band or collar shows, it is a top. "
+    "Use the measurements given with the image. If you can't tell, say so with a confidence below 0.6. "
+    "Record every structural detail that makes the piece what it is in distinctive_details, and in the subtype when it "
+    "defines it (a 'ruffle-hem tank top', not a 'tank top'): ruffles, frills, tiers, an attached skirt or peplum, lace "
+    "trim, smocking, bows, pleats, cut-outs. Leave inside labels (care, "
     "size or brand tags at the neck or waistband) out of distinctive_details: nobody sees them when "
     "the garment is worn."
 )
 
 
-def tag_garment(cutout: Image.Image, provider: str | None = None, hint: str = "") -> Garment:
+def tag_garment(cutout: Image.Image, provider: str | None = None, hint: str = "", notes: str = "") -> Garment:
     """Structured tags for one cutout. `hint` is the owner's correction ("it's a hoodie, not a dress").
 
     Meta: Responses API with text_format (the documented image path).
@@ -46,7 +54,7 @@ def tag_garment(cutout: Image.Image, provider: str | None = None, hint: str = ""
     client = config.client_for(provider)
     model = config.TAG_MODEL[provider]
     image_url = to_data_url(on_white(cutout))
-    ask = "Tag this item."
+    ask = "Tag this item." + (f" {notes}" if notes else "")
     if hint.strip():
         ask += (f" The owner says: \"{hint.strip()[:200]}\". Trust them about what the item is; describe "
                 "everything else from the image.")

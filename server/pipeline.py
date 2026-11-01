@@ -40,6 +40,7 @@ class PhotoResult:
     dropped: list[dict] = field(default_factory=list)  # {source, reason}
     cached: bool = False
     replayed: bool = False
+    warning: str | None = None  # e.g. white clothes on a white sheet
 
 
 def _png(img: Image.Image) -> bytes:
@@ -61,7 +62,8 @@ class Pipeline:
         key = scan_key(data)
         hit = self.cache.get("scans", key)
         if hit and all((self.settings.cutout_dir / f"{i['item_id']}.png").exists() for i in hit["kept"]):
-            return PhotoResult(source, hit["kept"], [{"source": source, "reason": r} for r in hit["dropped"]], cached=True)
+            return PhotoResult(source, hit["kept"], [{"source": source, "reason": r} for r in hit["dropped"]], cached=True,
+                               warning=hit.get("warning"))
 
         if not self.settings.live:
             recorded = self.cache.keys("scans")
@@ -92,12 +94,13 @@ class Pipeline:
             item_id = sha256(png)[:16]
             (self.settings.cutout_dir / f"{item_id}.png").write_bytes(png)
             kept.append({"item_id": item_id, "confidence": it.confidence})
-        self.cache.put("scans", key, {"source": source, "kept": kept, "dropped": dropped, "version": "scan"})
-        return PhotoResult(source, kept, [{"source": source, "reason": r} for r in dropped])
+        warning = scan.contrast_warning(photo, items)
+        self.cache.put("scans", key, {"source": source, "kept": kept, "dropped": dropped, "version": "scan", "warning": warning})
+        return PhotoResult(source, kept, [{"source": source, "reason": r} for r in dropped], warning=warning)
 
     # -- tagging
 
-    async def _tag(self, item_id: str) -> tuple[Garment | None, str | None]:
+    async def _tag(self, item_id: str, notes: str = "") -> tuple[Garment | None, str | None]:
         png = (self.settings.cutout_dir / f"{item_id}.png").read_bytes()
         key = tag_key(png)
         hit = self.cache.get("tags", key)
@@ -107,7 +110,7 @@ class Pipeline:
             return None, "no recorded tags for this cutout (fixture mode)"
         async with self._tag_gate:
             try:
-                garment = await asyncio.to_thread(models.tag_garment, Image.open(io.BytesIO(png)))
+                garment = await asyncio.to_thread(models.tag_garment, Image.open(io.BytesIO(png)), None, "", notes)
             except Exception as e:  # one bad cutout shouldn't fail the whole scan
                 return None, f"{type(e).__name__}: {e}"[:300]
         self.cache.put("tags", key, garment.model_dump())
@@ -158,7 +161,8 @@ class Pipeline:
 
         kept = [(r.source, k) for r in results for k in r.kept]
         unique = list({k["item_id"]: (src, k) for src, k in kept}.values())  # same cutout twice -> once
-        tags = await asyncio.gather(*(self._tag(k["item_id"]) for _, k in unique))
+        notes = self._shape_notes(results)
+        tags = await asyncio.gather(*(self._tag(k["item_id"], notes.get(k["item_id"], "")) for _, k in unique))
         item_ids, new_ids = [], []
         for (src, k), (garment, err) in zip(unique, tags, strict=True):
             existed = self.store.get_item(k["item_id"]) is not None
@@ -172,6 +176,11 @@ class Pipeline:
         merged_into = {m["dropped_id"]: m["kept_id"] for m in dupes["merged"]}
         item_ids = list(dict.fromkeys(merged_into.get(i, i) for i in item_ids))
 
+        # Real clothes replace the sample closet: its made-up pieces would otherwise mix into their plans.
+        sample_removed = 0
+        if any(not r.replayed for r in results):
+            sample_removed = self.remove_sample()
+
         record = {
             "id": scan_id,
             "created_at": now(),
@@ -182,9 +191,34 @@ class Pipeline:
             "replayed": any(r.replayed for r in results),
             "item_ids": item_ids,
             "dropped": [d for r in results for d in r.dropped],
+            "warnings": [r.warning for r in results if r.warning],
         }
         self.store.add_scan(record)
-        return {**record, "duplicates": dupes}
+        return {**record, "duplicates": dupes, "sample_removed": sample_removed}
+
+    def _shape_notes(self, results: list[PhotoResult]) -> dict[str, str]:
+        """Outline measurements per new cutout, with its size next to the largest piece in the same photo."""
+        out = {}
+        for r in results:
+            if r.cached or r.replayed:
+                continue  # tags for these come from the cache
+            sizes = {k["item_id"]: dedupe_mod.visible_area(self.settings.cutout_dir / f"{k['item_id']}.png") for k in r.kept}
+            biggest = max(sizes.values(), default=0) or 1
+            for item_id, area in sizes.items():
+                img = Image.open(self.settings.cutout_dir / f"{item_id}.png")
+                out[item_id] = scan.shape_notes(img, area / biggest if len(sizes) > 1 else None)
+        return out
+
+    def sample_ids(self) -> set[str]:
+        import json
+        return {r["id"] for r in json.loads((SAMPLE_DIR / "closet.json").read_text(encoding="utf-8"))}
+
+    def remove_sample(self) -> int:
+        """Take the sample closet's pieces out (they're made up). Returns how many were removed."""
+        ids = self.sample_ids() & {i["id"] for i in self.store.list_items(include_hidden=True)}
+        for item_id in ids:
+            self.store.delete_item(item_id)
+        return len(ids)
 
     # -- the sample closet (fixtures/sample_closet, made by scripts/make_sample_closet.py)
 

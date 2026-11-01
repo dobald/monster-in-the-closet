@@ -44,6 +44,15 @@ def load_image(path: Path | io.BytesIO, max_edge: int = MAX_IMAGE_EDGE) -> Image
     return img
 
 
+def for_segmentation(img: Image.Image) -> Image.Image:
+    """A copy with boosted local contrast, for SAM only: a white tee on a white sheet (or navy on a dark
+    floor) has almost no edge to find, and CLAHE on the lightness channel brings out its folds, seams
+    and shadow line. Cutouts are still cut from the original, so colours stay true."""
+    lab = cv2.cvtColor(np.asarray(img.convert("RGB")), cv2.COLOR_RGB2LAB)
+    lab[..., 0] = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8)).apply(lab[..., 0])
+    return Image.fromarray(cv2.cvtColor(lab, cv2.COLOR_LAB2RGB))
+
+
 def to_data_url(img: Image.Image, fmt: str = "JPEG") -> str:
     buf = io.BytesIO()
     if fmt == "JPEG":

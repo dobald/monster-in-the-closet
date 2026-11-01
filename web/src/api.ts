@@ -228,6 +228,8 @@ export interface Scan {
   dropped: { source: string; reason: string }[];
   items: Item[];
   duplicates: Duplicates | null;
+  sample_removed?: number; // sample-closet pieces this real scan replaced
+  warnings?: string[]; // e.g. light clothes on a light background
 }
 
 export interface GapPiece {
@@ -463,6 +465,8 @@ export const api = {
   setLastWorn: (items: { id: string; days_ago: number | null }[]) =>
     call<Item[]>("/api/wardrobe/last-worn", json("POST", { items })),
   deleteItem: (id: string) => call<void>(`/api/wardrobe/${id}`, { method: "DELETE" }),
+  restoreItem: (id: string) => call<Item>(`/api/wardrobe/${id}/restore`, { method: "POST" }),
+  choosePhoto: (id: string, use: "scan" | "redraw") => call<Item>(`/api/wardrobe/${id}/photo`, json("POST", { use })),
   // Correcting a piece: fix its tags by hand, ask the tagger again (with a hint), or replace its photo.
   fixItem: (id: string, changes: Partial<Tags>) => call<Item>(`/api/wardrobe/${id}`, json("PATCH", changes)),
   retagItem: (id: string, hint: string) => call<Item>(`/api/wardrobe/${id}/retag`, json("POST", { hint })),
@@ -533,6 +537,7 @@ export const api = {
   openCloset: (id: string) => call<{ id: string }>("/api/closet/open", json("POST", { id })),
   newCloset: () => call<{ id: string }>("/api/closet/new", { method: "POST" }),
   loadSample: () => call<{ imported: number }>("/api/closet/sample", { method: "POST" }),
+  removeSample: () => call<{ removed: number }>("/api/closet/sample", { method: "DELETE" }),
   scan: (photos: File[]) => {
     const form = new FormData();
     photos.forEach((p) => form.append("photos", p, p.name));

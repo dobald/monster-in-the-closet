@@ -147,9 +147,17 @@ export function Quiz({ kind = "styles", onDone, ctx }: { kind?: "styles" | "outf
         {kind === "styles" ? "Go with your gut: the board you'd rather wear. No wrong answers." : "Tap the one you'd rather wear. Every answer teaches the oni your taste."}
       </span>
       {!saving && (
-        <button type="button" onClick={() => finish(answers)} className="small" style={{ alignSelf: "center", border: 0, background: "none", textDecoration: "underline", color: "inherit", padding: 4 }}>
-          {answers.length ? "That's enough for now" : "Skip for now"}
-        </button>
+        <div style={{ display: "flex", justifyContent: "center", gap: 16 }}>
+          {answers.length > 0 && (
+            // Picks are only saved when the round ends, so going back is just dropping the last one.
+            <button type="button" onClick={() => setAnswers(answers.slice(0, -1))} className="small" style={{ border: 0, background: "none", textDecoration: "underline", color: "inherit", padding: 4, fontWeight: 700 }}>
+              ↶ Undo last pick
+            </button>
+          )}
+          <button type="button" onClick={() => finish(answers)} className="small" style={{ border: 0, background: "none", textDecoration: "underline", color: "inherit", padding: 4 }}>
+            {answers.length ? "That's enough for now" : "Skip for now"}
+          </button>
+        </div>
       )}
     </div>
   );

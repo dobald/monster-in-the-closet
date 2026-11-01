@@ -3,6 +3,7 @@ import { api, ApiError, itemName, type Item, type Place, type Plan, type Profile
 import type { AppCtx } from "../App";
 import Oni from "../Oni";
 import { LastWornList } from "./LastWorn";
+import { FoundGrid, markScanned, ScanGuide } from "./ScanGuide";
 import { Quiz } from "./Taste";
 
 // Getting started: meet the oni, then give it the things it needs to dress you (where you are,
@@ -202,13 +203,23 @@ function PlaceStep({ profile, ctx, onNext }: { profile: Profile; ctx: AppCtx; on
   useEffect(() => {
     if (q.trim().length < 2) {
       setResults([]);
+      setSearching(false);
       return;
     }
+    // Only the latest query may set results: a slower reply for "Tor" must not replace the one for "Toronto".
+    let current = true;
     const t = setTimeout(() => {
       setSearching(true);
-      api.geocode(q).then(setResults).catch((e) => ctx.toast((e as Error).message)).finally(() => setSearching(false));
-    }, 350);
-    return () => clearTimeout(t);
+      api
+        .geocode(q)
+        .then((r) => current && setResults(r))
+        .catch((e) => current && ctx.toast((e as Error).message))
+        .finally(() => current && setSearching(false));
+    }, 300);
+    return () => {
+      current = false;
+      clearTimeout(t);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [q]);
 
@@ -255,6 +266,9 @@ function PlaceStep({ profile, ctx, onNext }: { profile: Profile; ctx: AppCtx; on
             <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search your city, e.g. Toronto" style={{ flex: 1, minWidth: 0, border: 0, outline: "none", background: "transparent", fontSize: 15 }} />
             {searching && <span className="small muted">…</span>}
           </label>
+          {!searching && q.trim().length >= 2 && results.length === 0 && (
+            <span className="small muted">No match yet. Try just the city name, e.g. "Toronto".</span>
+          )}
           {results.length > 0 && (
             <div role="listbox" aria-label="Cities" className="card" style={{ overflow: "hidden" }}>
               {results.map((r, n) => (
@@ -263,7 +277,11 @@ function PlaceStep({ profile, ctx, onNext }: { profile: Profile; ctx: AppCtx; on
                   type="button"
                   role="option"
                   aria-selected={false}
-                  onClick={() => setPlace(r)}
+                  onClick={() => {
+                    setPlace(r);
+                    setQ("");
+                    setResults([]);
+                  }}
                   style={{ display: "block", width: "100%", textAlign: "left", padding: "11px 14px", border: 0, borderTop: n ? "var(--line)" : 0, background: "transparent", fontSize: 14, fontWeight: 700 }}
                 >
                   {r.name}
@@ -412,6 +430,7 @@ function ClosetStep({ profile, ctx, onChange, onNext }: { profile: Profile; ctx:
   const [busy, setBusy] = useState(false);
   const [scan, setScan] = useState<Scan | null>(null);
   const input = useRef<HTMLInputElement>(null);
+  const camera = useRef<HTMLInputElement>(null);
   const w = profile.wardrobe;
   const total = Object.values(w).reduce((a, b) => a + (b ?? 0), 0);
 
@@ -421,8 +440,10 @@ function ClosetStep({ profile, ctx, onChange, onNext }: { profile: Profile; ctx:
       const r = await api.scan(files);
       setScan(r);
       setFiles([]);
+      markScanned();
       ctx.bumpWardrobe();
       onChange();
+      if (r.sample_removed) ctx.toast(`Your own clothes are in, so I took out the ${r.sample_removed} sample pieces.`);
     } catch (e) {
       ctx.toast((e as Error).message);
     } finally {
@@ -463,18 +484,25 @@ function ClosetStep({ profile, ctx, onChange, onNext }: { profile: Profile; ctx:
             <h2 className="display" style={{ fontSize: 30 }}>{scan.replayed ? "DEMO SCAN" : `FOUND ${scan.items.length}!`}</h2>
           </div>
           {scan.replayed && <span className="small" style={{ color: "var(--shu)", fontWeight: 700 }}>Demo mode: your photo wasn't sent to the models, so this is a recorded scan, not your clothes. Start the server in live mode to scan for real.</span>}
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 8 }}>
-            {scan.items.map((it, n) => (
-              <span key={it.id} className="halftone" title={itemName(it)} style={{ aspectRatio: "1", border: "var(--line)", borderRadius: 8, padding: 4, animation: `rise .3s ease-out ${n * 0.05}s both` }}>
-                <img className="cutout" src={it.photo_url} alt={itemName(it)} />
-              </span>
-            ))}
-          </div>
+          <span className="small"><strong>Check what I found.</strong> Tap a piece to fix what it is; ✕ removes a bad cut-out.</span>
+          {scan.warnings?.map((w) => <span key={w} className="small" style={{ color: "var(--shu)" }}>{w}</span>)}
+          <FoundGrid
+            items={scan.items}
+            ctx={ctx}
+            onRemoved={(ids) => {
+              setScan((now) => now && { ...now, items: now.items.filter((i) => !ids.includes(i.id)) });
+              onChange();
+            }}
+            onRestored={(back) => {
+              setScan((now) => now && { ...now, items: [...now.items, ...back.filter((b) => !now.items.some((i) => i.id === b.id))] });
+              onChange();
+            }}
+          />
           {!!scan.duplicates?.merged.length && <span className="small">{scan.duplicates.merged.length} were already in your closet, so I merged them.</span>}
         </div>
       ) : (
         <>
-          <FlatLayGuide />
+          <ScanGuide />
           <DataNote />
         </>
       )}
@@ -489,17 +517,22 @@ function ClosetStep({ profile, ctx, onChange, onNext }: { profile: Profile; ctx:
         </div>
       )}
 
-      <input ref={input} type="file" accept="image/*,.heic,.heif" multiple hidden onChange={(e) => { setFiles(Array.from(e.target.files ?? []).slice(0, 10)); setScan(null); e.target.value = ""; }} />
+      <input ref={input} type="file" accept="image/*,.heic,.heif" multiple hidden onChange={(e) => { setFiles([...files, ...Array.from(e.target.files ?? [])].slice(0, 10)); setScan(null); e.target.value = ""; }} />
+      <input ref={camera} type="file" accept="image/*,.heic,.heif" capture="environment" hidden onChange={(e) => { setFiles([...files, ...Array.from(e.target.files ?? [])].slice(0, 10)); setScan(null); e.target.value = ""; }} />
       <Footer>
-        {files.length > 0 ? (
+        {files.length > 0 && (
           <button type="button" className="btn shu press block" style={{ height: 52 }} disabled={busy} onClick={run}>
             Scan {files.length} photo{files.length > 1 ? "s" : ""} →
           </button>
-        ) : (
-          <button type="button" className={"btn press block " + (profile.can_plan ? "" : "shu")} style={{ height: 52 }} disabled={busy} onClick={() => input.current?.click()}>
-            {total ? "Scan another batch" : "Take or choose photos"}
-          </button>
         )}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+          <button type="button" className={"btn press " + (files.length || profile.can_plan ? "" : "shu")} style={{ height: 52 }} disabled={busy} onClick={() => camera.current?.click()}>
+            {files.length ? "Take another" : total ? "Scan more" : "Take a photo"}
+          </button>
+          <button type="button" className="btn press" style={{ height: 52 }} disabled={busy} onClick={() => input.current?.click()}>
+            Choose photos
+          </button>
+        </div>
         {!total && !files.length && (
           <button type="button" className="btn press block" style={{ height: 52 }} disabled={busy} onClick={sample}>
             No clothes handy? Try a sample closet
@@ -539,30 +572,6 @@ export function DataNote() {
 }
 
 // A little drawing of a good flat-lay, plus the three rules that make scans work.
-function FlatLayGuide() {
-  const pieces = [
-    { x: 14, y: 14, w: 34, h: 30, r: -4, c: "var(--ai)" },
-    { x: 54, y: 10, w: 32, h: 40, r: 3, c: "var(--sumi)" },
-    { x: 12, y: 52, w: 26, h: 38, r: 2, c: "var(--shu)" },
-    { x: 46, y: 58, w: 40, h: 28, r: -3, c: "var(--ghost)" },
-  ];
-  return (
-    <div style={{ display: "flex", gap: 12, alignItems: "stretch" }}>
-      <div aria-hidden="true" style={{ position: "relative", flex: "none", width: 128, aspectRatio: "1", border: "var(--line)", borderRadius: 10, background: "var(--cam)" }}>
-        <span style={{ position: "absolute", inset: 6, border: "2px dashed var(--washi)", borderRadius: 8 }} />
-        {pieces.map((p, n) => (
-          <span key={n} style={{ position: "absolute", left: `${p.x}%`, top: `${p.y}%`, width: `${p.w}%`, height: `${p.h}%`, background: p.c, border: "1.5px solid var(--sumi)", borderRadius: 4, transform: `rotate(${p.r}deg)` }} />
-        ))}
-      </div>
-      <ol style={{ margin: 0, paddingLeft: 18, display: "flex", flexDirection: "column", justifyContent: "center", gap: 6, fontSize: 14, lineHeight: 1.35 }}>
-        <li><strong>Up to 8 pieces</strong> flat on a bed or the floor; one is fine</li>
-        <li><strong>No overlaps:</strong> leave a gap around each</li>
-        <li><strong>Print side up</strong>, in good light</li>
-      </ol>
-    </div>
-  );
-}
-
 // ------------------------------------------------------------------ 5. when did you last wear these
 
 function HistoryStep({ ctx, onNext }: { ctx: AppCtx; onNext: () => void }) {

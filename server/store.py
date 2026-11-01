@@ -106,12 +106,16 @@ def now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+REMOVED_KEEP_DAYS = 2  # a removed piece can be undone for this long
+
+
 class Store:
     def close(self) -> None:
         with self._lock:
             self._db.close()
 
     def __init__(self, path: Path):
+        self.path = path
         self._db = sqlite3.connect(path, check_same_thread=False)
         self._db.row_factory = sqlite3.Row
         self._lock = threading.Lock()
@@ -122,10 +126,15 @@ class Store:
             if "worn_estimated" not in cols:
                 self._db.execute("ALTER TABLE items ADD COLUMN worn_estimated INTEGER NOT NULL DEFAULT 0")
                 self._db.commit()
+            # Added later: removing a piece hides it for a while first, so it can be undone.
+            if "removed_at" not in {r[1] for r in self._db.execute("PRAGMA table_info(items)")}:
+                self._db.execute("ALTER TABLE items ADD COLUMN removed_at TEXT")
+                self._db.commit()
             # Added later: a plan for one event (JSON {event, read}) rather than the whole day.
             if "occasion" not in {r[1] for r in self._db.execute("PRAGMA table_info(plans)")}:
                 self._db.execute("ALTER TABLE plans ADD COLUMN occasion TEXT")
                 self._db.commit()
+        self._purge_removed()  # takes the lock itself
 
     # -- items
 
@@ -144,6 +153,7 @@ class Store:
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(id) DO UPDATE SET
                      scan_id = excluded.scan_id,
+                     removed_at = NULL,
                      tags = CASE WHEN items.user_edited THEN items.tags ELSE COALESCE(excluded.tags, items.tags) END,
                      tag_error = excluded.tag_error,
                      is_garment = CASE WHEN items.user_edited THEN items.is_garment ELSE excluded.is_garment END""",
@@ -151,14 +161,17 @@ class Store:
             )
         return item_id
 
-    def get_item(self, item_id: str) -> dict | None:
-        """An item by id, following merges so old plans and scans still resolve."""
+    def get_item(self, item_id: str, include_removed: bool = False) -> dict | None:
+        """An item by id, following merges so old plans and scans still resolve. Removed pieces (waiting for an
+        undo) count as gone unless asked for."""
         with self._lock:
             row = self._db.execute("SELECT * FROM items WHERE id = ?", (item_id,)).fetchone()
             if not row:
                 row = self._db.execute(
                     "SELECT items.* FROM aliases JOIN items ON items.id = aliases.item_id WHERE aliases.alias_id = ?",
                     (item_id,)).fetchone()
+        if row and row["removed_at"] and not include_removed:
+            return None
         return _item(row) if row else None
 
     # -- duplicates
@@ -190,7 +203,7 @@ class Store:
 
     def list_items(self, include_hidden: bool = False, category: str | None = None) -> list[dict]:
         with self._lock:
-            rows = self._db.execute("SELECT * FROM items ORDER BY created_at, id").fetchall()
+            rows = self._db.execute("SELECT * FROM items WHERE removed_at IS NULL ORDER BY created_at, id").fetchall()
         items = [_item(r) for r in rows]
         if not include_hidden:
             items = [i for i in items if i["is_garment"]]
@@ -206,9 +219,29 @@ class Store:
             )
 
     def delete_item(self, item_id: str) -> bool:
+        """Remove a piece (a bad scan, or not theirs). It's hidden at once and kept for REMOVED_KEEP_DAYS,
+        so "Undo" can bring it back; after that it's deleted for good with its wear history."""
         with self._lock, self._db:
-            self._db.execute("DELETE FROM aliases WHERE item_id = ?", (item_id,))
-            return self._db.execute("DELETE FROM items WHERE id = ?", (item_id,)).rowcount > 0
+            return self._db.execute("UPDATE items SET removed_at = ? WHERE id = ? AND removed_at IS NULL",
+                                    (now(), item_id)).rowcount > 0
+
+    def restore_item(self, item_id: str) -> bool:
+        with self._lock, self._db:
+            return self._db.execute("UPDATE items SET removed_at = NULL WHERE id = ? AND removed_at IS NOT NULL",
+                                    (item_id,)).rowcount > 0
+
+    def _purge_removed(self) -> None:
+        """Delete for good the pieces removed more than REMOVED_KEEP_DAYS ago, with their wears and cutouts."""
+        from datetime import timedelta
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=REMOVED_KEEP_DAYS)).isoformat(timespec="seconds")
+        with self._lock, self._db:
+            gone = [r[0] for r in self._db.execute("SELECT id FROM items WHERE removed_at < ?", (cutoff,)).fetchall()]
+            for item_id in gone:
+                self._db.execute("DELETE FROM aliases WHERE item_id = ?", (item_id,))
+                self._db.execute("DELETE FROM wears WHERE item_id = ?", (item_id,))
+                self._db.execute("DELETE FROM items WHERE id = ?", (item_id,))
+        for item_id in gone:
+            (self.path.parent / "cutouts" / f"{item_id}.png").unlink(missing_ok=True)
 
     # -- scans
 

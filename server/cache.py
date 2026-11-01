@@ -24,7 +24,7 @@ def _schema_hash() -> str:
     return sha256(json.dumps(Garment.model_json_schema(), sort_keys=True).encode())[:8]
 
 
-SCAN_VERSION = f"scan1-{scan.PROMPT}-{scan.SEGMENT_EDGE}px-conf{scan.MIN_CONFIDENCE}"
+SCAN_VERSION = f"scan1-{scan.PROMPT}-{scan.SEGMENT_EDGE}px-conf{scan.MIN_CONFIDENCE}-{scan.SEGMENT_PREP}"
 TAG_VERSION = f"tag-{config.TAG_PROVIDER}-{config.TAG_MODEL[config.TAG_PROVIDER]}-{_schema_hash()}"
 
 

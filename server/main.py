@@ -11,6 +11,8 @@ from __future__ import annotations
 import os
 import re
 from contextlib import asynccontextmanager
+
+import httpx
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Any, Literal
@@ -94,6 +96,8 @@ class ScanOut(BaseModel):
     dropped: list[dict[str, Any]]
     items: list[ItemOut]
     duplicates: DuplicatesOut | None = None  # only on the response to the scan itself
+    sample_removed: int = 0  # sample-closet pieces this real scan replaced
+    warnings: list[str] = []  # e.g. light clothes on a light background
 
 
 class PairIn(BaseModel):
@@ -329,7 +333,7 @@ def get_item(item_id: str) -> ItemOut:
 
 
 @app.patch("/api/wardrobe/{item_id}", response_model=ItemOut)
-def fix_tags(item_id: str, changes: dict[str, Any]) -> ItemOut:
+async def fix_tags(item_id: str, changes: dict[str, Any]) -> ItemOut:  # async: a redraw may be scheduled
     """The 'Fix tags' button: merge the user's corrections into the item's tags."""
     store = C().store
     item = store.get_item(item_id)
@@ -365,6 +369,27 @@ def _redraw(item_id: str) -> None:
     item = C().store.get_item(item_id)
     if item:
         app.state.products.start([item], C().settings.cutout_dir)
+
+
+class PhotoChoiceIn(BaseModel):
+    use: Literal["scan", "redraw"]
+
+
+@app.post("/api/wardrobe/{item_id}/photo", response_model=ItemOut)
+async def choose_photo(item_id: str, body: PhotoChoiceIn) -> ItemOut:  # async: a redraw is scheduled on this loop
+    """The redrawn product shot lost something? "scan" shows the real cutout from now on; "redraw" makes it again
+    (live mode, with the detail check)."""
+    item = C().store.get_item(item_id)
+    if not item:
+        raise HTTPException(404, "No such item.")
+    if body.use == "scan":
+        app.state.products.use_scan(item_id)
+    else:
+        if not app.state.settings.live:
+            raise HTTPException(409, "Redrawing needs live mode (it calls Muse Image).")
+        app.state.products.forget(item_id)
+        app.state.products.start([item], C().settings.cutout_dir)
+    return _item_out(C().store.get_item(item_id))
 
 
 class RetagIn(BaseModel):
@@ -407,9 +432,17 @@ async def rescan_item(item_id: str, photo: UploadFile = File(..., description="O
 
 @app.delete("/api/wardrobe/{item_id}", status_code=204)
 def delete_item(item_id: str) -> None:
+    """Remove a piece. It's hidden at once and can be restored for two days (the app's "Undo")."""
     if not C().store.delete_item(item_id):
         raise HTTPException(404, "No such item.")
-    (C().settings.cutout_dir / f"{item_id}.png").unlink(missing_ok=True)
+
+
+@app.post("/api/wardrobe/{item_id}/restore", response_model=ItemOut)
+def restore_item(item_id: str) -> ItemOut:
+    """Undo a removal: the piece comes back with its wear history."""
+    if not C().store.restore_item(item_id):
+        raise HTTPException(404, "Nothing to undo for that piece.")
+    return _item_out(C().store.get_item(item_id))
 
 
 @app.get("/api/products")
@@ -438,7 +471,7 @@ def cutout(item_id: str) -> FileResponse:
     if not SAFE_NAME.match(item_id):
         raise HTTPException(404, "No such cutout.")
     path = C().settings.cutout_dir / f"{item_id}.png"
-    if not path.exists():
+    if not path.exists() or not C().store.get_item(item_id):  # a removed piece waiting for "Undo" isn't shown
         raise HTTPException(404, "No such cutout.")
     return FileResponse(path, media_type="image/png", headers={"Cache-Control": "private, max-age=31536000, immutable"})
 
@@ -771,6 +804,15 @@ def touch_example(play: str) -> FileResponse:
     return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "public, max-age=604800"})
 
 
+@app.get("/api/scan-guide/{name}.jpg")
+def scan_guide(name: str) -> FileResponse:
+    """The how-to-scan guide's example photos (scripts/make_scan_guide.py): the same for everyone."""
+    path = config.ROOT / "fixtures" / "scan_guide" / f"{name}.jpg"
+    if name not in ("good", "bad") or not path.exists():
+        raise HTTPException(404, "No such picture.")
+    return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "public, max-age=604800"})
+
+
 @app.get("/api/renders/{name}.png")
 def render_file(name: str) -> FileResponse:
     if not SAFE_NAME.match(name.replace("-", "")):
@@ -841,6 +883,12 @@ def load_sample_closet() -> dict:
     return C().pipeline.load_sample(today_local())
 
 
+@app.delete("/api/closet/sample")
+def remove_sample_closet() -> dict:
+    """Take the sample closet's made-up pieces out (a real scan does this by itself)."""
+    return {"removed": C().pipeline.remove_sample()}
+
+
 @app.post("/api/closet/new")
 def new_closet(request: Request) -> dict:
     """Start over in a fresh, empty closet. The old one stays reachable through its link."""
@@ -907,6 +955,39 @@ def delete_calendar() -> dict:
     return _profile_out()
 
 
+async def _city_search(q: str) -> list[dict]:
+    """Open-Meteo's geocoder matches a bare place name only, so "Toronto, Ontario" or "Paris France" found
+    nothing. Search the name, then keep the places whose region or country matches the rest of the query."""
+    async def search(name: str) -> list[dict]:
+        async with httpx.AsyncClient(timeout=8) as client:
+            r = await client.get("https://geocoding-api.open-meteo.com/v1/search",
+                                 params={"name": name, "count": 10, "language": "en", "format": "json"})
+            r.raise_for_status()
+        return r.json().get("results", []) or []
+
+    def place(g: dict) -> dict:
+        return {"name": ", ".join(x for x in (g.get("name"), g.get("admin1"), g.get("country")) if x),
+                "lat": round(g["latitude"], 4), "lon": round(g["longitude"], 4)}
+
+    parts = [p.strip() for p in q.split(",") if p.strip()]
+    words = q.replace(",", " ").split()
+    # "City, region": the city first. Otherwise the whole query, then fewer and fewer leading words.
+    first = [parts[0]] if len(parts) > 1 else []
+    tries = list(dict.fromkeys(first + [q] + [" ".join(words[:n]) for n in range(len(words) - 1, 0, -1)]))
+    for name in tries:
+        found = await search(name)
+        if not found:
+            continue
+        rest = q.lower().replace(",", " ").replace(name.lower(), " ").split()
+        if rest:  # the extra words name a region or country: prefer places that match them
+            def matches(g: dict, rest: list[str] = rest) -> bool:
+                where = " ".join(str(g.get(k, "")) for k in ("admin1", "admin2", "country", "country_code")).lower()
+                return all(w in where for w in rest)
+            found = [g for g in found if matches(g)] or found
+        return [place(g) for g in found[:6]]
+    return []
+
+
 @app.get("/api/geocode")
 async def geocode(q: str) -> list[dict]:
     """City search for the weather location (Open-Meteo geocoding: free, no key)."""
@@ -915,16 +996,10 @@ async def geocode(q: str) -> list[dict]:
         return []
     if q.lower() in _geocode_cache:
         return _geocode_cache[q.lower()]
-    import httpx
     try:
-        async with httpx.AsyncClient(timeout=8) as client:
-            r = await client.get("https://geocoding-api.open-meteo.com/v1/search",
-                                 params={"name": q, "count": 6, "language": "en", "format": "json"})
-            r.raise_for_status()
+        out = await _city_search(q)
     except httpx.HTTPError:
         raise HTTPException(502, "City search is unavailable right now.") from None
-    out = [{"name": ", ".join(x for x in (g.get("name"), g.get("admin1"), g.get("country")) if x),
-            "lat": round(g["latitude"], 4), "lon": round(g["longitude"], 4)} for g in r.json().get("results", [])]
     if len(_geocode_cache) >= 500:  # a small cache, not a memory leak for anyone sending random queries
         _geocode_cache.pop(next(iter(_geocode_cache)))
     _geocode_cache[q.lower()] = out

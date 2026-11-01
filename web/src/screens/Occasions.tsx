@@ -2,7 +2,8 @@ import { useEffect, useState } from "react";
 import { api, type CalendarEvent, type Plan, type UpcomingEvent } from "../api";
 import type { AppCtx } from "../App";
 import Oni from "../Oni";
-import { Collage } from "./Today";
+import { useSwipe } from "../swipe";
+import { Collage, LookDots } from "./Today";
 
 // Dress for an occasion: the week's events (the ones on Today's ticker), each read as an occasion
 // (how dressed up, evening, outdoors), and looks planned for just that event. Something not on the
@@ -122,6 +123,7 @@ export function ComingUp({ ctx }: { ctx: AppCtx }) {
 function OccasionSheet({ ctx, start, onClose }: { ctx: AppCtx; start: Open; onClose: () => void }) {
   const [target, setTarget] = useState<{ event: CalendarEvent; day: string } | null>("typing" in start ? null : { event: start.event, day: start.day });
   const [plan, setPlan] = useState<Plan | null>(null);
+  const [typed, setTyped] = useState<{ event: CalendarEvent; day: string } | null>(null); // a typed occasion, to edit again
   const [error, setError] = useState<string | null>(null);
   const [look, setLook] = useState(0);
   const [busy, setBusy] = useState(false);
@@ -147,6 +149,9 @@ function OccasionSheet({ ctx, start, onClose }: { ctx: AppCtx; start: Open; onCl
   }, []);
 
   const today = !!target && target.day === iso(new Date());
+  const looks = plan?.looks.length ?? 0;
+  const step = (d: number) => looks > 1 && setLook((look + d + looks) % looks);
+  const swipe = useSwipe(() => step(1), () => step(-1));
   const read = plan?.occasion?.read;
   const current = plan?.looks[look];
   const stretch = plan?.trace.stretch?.look === look;
@@ -180,9 +185,21 @@ function OccasionSheet({ ctx, start, onClose }: { ctx: AppCtx; start: Open; onCl
         </div>
 
         {!target ? (
-          <TypeOccasion onPlan={(t) => plan_(t)} />
+          <TypeOccasion initial={typed} onPlan={(t) => {
+            setTyped(t);
+            plan_(t);
+          }} />
         ) : (
           <>
+            {typed && (
+              <button type="button" className="chip press" style={{ alignSelf: "flex-start", height: 30, fontSize: 12 }} onClick={() => {
+                setTarget(null);
+                setPlan(null);
+                setError(null);
+              }}>
+                ‹ Change details
+              </button>
+            )}
             <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
               <span className="label">
                 {dayLabel(target.day)}
@@ -225,12 +242,17 @@ function OccasionSheet({ ctx, start, onClose }: { ctx: AppCtx; start: Open; onCl
                   <span className="label" style={{ fontSize: 11, color: stretch ? "var(--shu)" : undefined }}>
                     {stretch ? "STRETCH" : look === 0 ? "THE PICK" : "ALSO GOOD"} · LOOK {LETTERS[look]}
                   </span>
-                  <span className="label" style={{ fontWeight: 400, fontSize: 11 }}>{look + 1} / {plan.looks.length}</span>
+                  {looks > 1 && <LookDots n={looks} at={look} onPick={setLook} />}
                 </div>
-                <Collage key={plan.id + look} items={current.items} onOpen={ctx.openItem} onTryOn={() => ctx.openTryOn(plan, look)} />
+                <div {...swipe}>
+                  <Collage key={plan.id + look} items={current.items} onOpen={ctx.openItem} onTryOn={() => ctx.openTryOn(plan, look)} />
+                </div>
                 <h2 className="display" style={{ fontSize: 22, lineHeight: 1.05 }}>{current.name}</h2>
                 <p style={{ margin: 0, fontSize: 14, lineHeight: 1.55 }}>{current.why}</p>
-                <div style={{ display: "flex", gap: 10 }}>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button type="button" className="btn press" aria-label="Previous look" style={{ flex: "none", width: 52, padding: 0 }} disabled={looks < 2} onClick={() => step(-1)}>
+                    ‹
+                  </button>
                   {today ? (
                     <button type="button" className="btn primary press" style={{ flex: 1.2 }} disabled={busy} onClick={wear}>
                       {busy ? "Logging…" : "Wear this →"}
@@ -240,13 +262,16 @@ function OccasionSheet({ ctx, start, onClose }: { ctx: AppCtx; start: Open; onCl
                       Saved for {savedFor(target.day)} ✓
                     </span>
                   )}
-                  <button type="button" className="btn press" style={{ flex: 1 }} disabled={plan.looks.length < 2} onClick={() => setLook((look + 1) % plan.looks.length)}>
-                    Next look ⇄
+                  <button type="button" className="btn press" aria-label="Next look" style={{ flex: "none", width: 52, padding: 0 }} disabled={looks < 2} onClick={() => step(1)}>
+                    ›
                   </button>
                 </div>
-                <button type="button" className="chip shu press" style={{ alignSelf: "flex-start" }} onClick={() => plan_(target, true)}>
-                  Re-roll ↻
-                </button>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <span className="label" style={{ fontWeight: 400, fontSize: 10 }}>{looks > 1 ? "SWIPE FOR MORE LOOKS ⇆" : ""}</span>
+                  <button type="button" className="chip press" style={{ height: 28, fontSize: 12 }} onClick={() => plan_(target, true)}>
+                    ↻ New picks
+                  </button>
+                </div>
               </>
             )}
           </>
@@ -256,59 +281,83 @@ function OccasionSheet({ ctx, start, onClose }: { ctx: AppCtx; start: Open; onCl
   );
 }
 
-const IDEAS = ["Job interview", "First date", "Wedding", "Dinner out", "Gym", "Presentation"];
+const IDEAS = ["Job interview", "First date", "Wedding", "Dinner out", "Gym", "Presentation", "Party", "Brunch"];
+// Times as parts of the day: the forecast is read by part, and a native time picker shows as an empty box on many phones.
+const TIMES: [string, string][] = [["Morning", "09:00"], ["Afternoon", "14:00"], ["Evening", "19:00"], ["All day", "all day"]];
 
-function TypeOccasion({ onPlan }: { onPlan: (t: { event: CalendarEvent; day: string }) => void }) {
-  const [title, setTitle] = useState("");
-  const [offset, setOffset] = useState(0);
-  const [time, setTime] = useState("");
-  const [place, setPlace] = useState("");
+function TypeOccasion({ initial, onPlan }: { initial: { event: CalendarEvent; day: string } | null; onPlan: (t: { event: CalendarEvent; day: string }) => void }) {
+  const days = Array.from({ length: 10 }, (_, n) => iso(addDays(n))); // two wide + two full rows of four
+  const [title, setTitle] = useState(initial?.event.title ?? "");
+  const [day, setDay] = useState(initial && days.includes(initial.day) ? initial.day : days[0]);
+  const [time, setTime] = useState(initial?.event.start ?? "19:00");
+  const [place, setPlace] = useState(initial?.event.location ?? "");
   const field = { display: "flex", alignItems: "center", height: 46, padding: "0 14px", border: "var(--line)", borderRadius: 23, background: "var(--washi)" } as const;
-  const input = { flex: 1, minWidth: 0, border: 0, outline: "none", background: "transparent", fontSize: 15 } as const;
+  const input = { flex: 1, minWidth: 0, border: 0, outline: "none", background: "transparent", fontSize: 15, color: "inherit" } as const;
+  const chip = { height: 32, fontSize: 12, padding: "0 10px" } as const;
+  const label = (d: string, n: number) => (n === 0 ? "Today" : n === 1 ? "Tomorrow" : dayLabel(d).charAt(0) + dayLabel(d).slice(1).toLowerCase());
 
   return (
     <form
-      style={{ display: "flex", flexDirection: "column", gap: 12 }}
+      style={{ display: "flex", flexDirection: "column", gap: 14 }}
       onSubmit={(e) => {
         e.preventDefault();
         if (!title.trim()) return;
-        onPlan({ day: iso(addDays(offset)), event: { title: title.trim(), start: time || "all day", location: place.trim() || undefined } });
+        onPlan({ day, event: { title: title.trim(), start: time, location: place.trim() || undefined } });
       }}
     >
       <h1 className="display" style={{ fontSize: 30, lineHeight: 1.05 }}>WHAT'S COMING UP?</h1>
-      <label style={field}>
-        <span style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", clip: "rect(0 0 0 0)" }}>What is it</span>
-        <input autoFocus value={title} maxLength={120} onChange={(e) => setTitle(e.target.value)} placeholder="Job interview, a wedding, first date…" style={input} />
-      </label>
-      <div role="group" aria-label="Ideas" style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-        {IDEAS.map((i) => (
-          <button key={i} type="button" className="chip press" aria-pressed={title === i} style={{ height: 30, fontSize: 12, padding: "0 10px" }} onClick={() => setTitle(i)}>
-            {i}
-          </button>
-        ))}
-      </div>
 
-      <span className="label">WHEN</span>
-      <div role="radiogroup" aria-label="Day" style={{ display: "flex", gap: 6, overflowX: "auto", scrollbarWidth: "none", paddingBottom: 4 }}>
-        {Array.from({ length: 7 }, (_, n) => (
-          <button key={n} type="button" role="radio" aria-checked={offset === n} className="chip press" style={{ height: 32, fontSize: 12, padding: "0 10px", flex: "none" }} onClick={() => setOffset(n)}>
-            {n === 0 ? "Today" : n === 1 ? "Tomorrow" : `${WEEKDAY[addDays(n).getDay()].slice(0, 1)}${WEEKDAY[addDays(n).getDay()].slice(1).toLowerCase()} ${addDays(n).getDate()}`}
-          </button>
-        ))}
-      </div>
-      <div style={{ display: "flex", gap: 8 }}>
-        <label style={{ ...field, flex: "0 0 128px" }}>
-          <span style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", clip: "rect(0 0 0 0)" }}>Time (optional)</span>
-          <input type="time" value={time} onChange={(e) => setTime(e.target.value)} style={input} />
+      <section style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        <span className="label">WHAT IS IT</span>
+        <label style={field}>
+          <span style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", clip: "rect(0 0 0 0)" }}>What is it</span>
+          <input value={title} maxLength={120} onChange={(e) => setTitle(e.target.value)} placeholder="Type it, or pick one below" style={input} />
         </label>
-        <label style={{ ...field, flex: 1 }}>
-          <span style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", clip: "rect(0 0 0 0)" }}>Where (optional)</span>
-          <input value={place} maxLength={120} onChange={(e) => setPlace(e.target.value)} placeholder="Where? (optional)" style={input} />
+        <div role="radiogroup" aria-label="Ideas" style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          {IDEAS.map((i) => (
+            <button key={i} type="button" role="radio" aria-checked={title === i} className="chip press" style={chip} onClick={() => setTitle(i)}>
+              {i}
+            </button>
+          ))}
+        </div>
+      </section>
+
+      <section style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        <span className="label">WHEN</span>
+        <div role="radiogroup" aria-label="Day" style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 6 }}>
+          {days.map((d, n) => (
+            <button key={d} type="button" role="radio" aria-checked={day === d} className="chip press" style={{ ...chip, padding: 0, gridColumn: n < 2 ? "span 2" : undefined }} onClick={() => setDay(d)}>
+              {label(d, n)}
+            </button>
+          ))}
+        </div>
+        <div role="radiogroup" aria-label="Time of day" style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 6 }}>
+          {TIMES.map(([name, t]) => (
+            <button key={t} type="button" role="radio" aria-checked={time === t} className="chip press" style={{ ...chip, padding: 0 }} onClick={() => setTime(t)}>
+              {name}
+            </button>
+          ))}
+        </div>
+      </section>
+
+      <section style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        <span className="label">WHERE <span style={{ fontWeight: 400 }}>(OPTIONAL)</span></span>
+        <label style={field}>
+          <span style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", clip: "rect(0 0 0 0)" }}>Where</span>
+          <input value={place} maxLength={120} onChange={(e) => setPlace(e.target.value)} placeholder="e.g. rooftop bar, office, park" style={input} />
         </label>
-      </div>
-      <span className="small muted">The time picks the right hours of the forecast; "outside", "patio" or "park" tells the oni to plan for the weather.</span>
+        <div role="group" aria-label="Indoors or outside" style={{ display: "flex", gap: 6 }}>
+          {["Indoors", "Outside"].map((w) => (
+            <button key={w} type="button" aria-pressed={place === w} className="chip press" style={chip} onClick={() => setPlace(place === w ? "" : w)}>
+              {w}
+            </button>
+          ))}
+        </div>
+      </section>
+
+      <span className="small muted">The time picks the right hours of the forecast; "Outside" tells the oni to dress you for the weather.</span>
       <button type="submit" className="btn primary press block" style={{ height: 50 }} disabled={!title.trim()}>
-        Plan it →
+        {title.trim() ? `Plan for ${title.trim().length > 22 ? "it" : title.trim().toLowerCase()} →` : "Say what it is first"}
       </button>
     </form>
   );

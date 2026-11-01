@@ -19,7 +19,7 @@ import meta_sam_parser as sp
 
 from . import media, sam
 from .dedupe import lab
-from .schema import Garment
+from .schema import DetailCheck, Garment
 
 SAM_EDGE = 1024
 MAX_DELTA_E = 20.0  # as for duplicates (closet/dedupe.py): a redraw also drops the room's colour cast, so a
@@ -49,7 +49,9 @@ def prompt(tags: Garment, color_hex: str) -> str:
             f"{POSE.get(tags.category, 'laid out neatly')}, smoothed with no wrinkles, whole and centred, with its "
             f"{side} facing the camera, on a plain light grey background, shot from directly above in soft even light. "
             "Keep it faithful: the same colour, wash and fabric, the same cut, length and fit, and every print, "
-            "graphic, text, stripe, pocket, button and seam that is on it. Add nothing that is not on the item and "
+            "graphic, text, stripe, pocket, button and seam that is on it. Keep its structure exactly: ruffles, "
+            "frills, tiers, an attached skirt or peplum, lace, smocking, bows, pleats and cut-outs stay, at their real "
+            "size and place; never simplify it into a plainer garment. Add nothing that is not on the item and "
             "remove nothing that is, except inside labels (care, size or brand tags), which stay out of sight. "
             "No person, no hanger, no mannequin, no props, no shadows on the background. "
             f"Item: {tags.render_line(color_hex)}.")
@@ -81,6 +83,37 @@ async def cut(client, photo: Image.Image, noun: str, open_shape: bool = False) -
     rgba.putalpha(Image.fromarray((mask * 255).astype(np.uint8)))
     ys, xs = np.nonzero(mask)
     return rgba.crop((max(xs.min() - 8, 0), max(ys.min() - 8, 0), min(xs.max() + 8, photo.width), min(ys.max() + 8, photo.height)))
+
+
+def check_details(cutout: Image.Image, shot: Image.Image, tags: Garment) -> DetailCheck:
+    """One Muse Spark 1.3 look: does the redraw keep the real garment's defining details? A redraw that turns a
+    frilled tank top into a plain one passes the colour check but fails this."""
+    from . import config
+    from .media import on_white, to_data_url
+
+    def fit(img: Image.Image) -> Image.Image:
+        img = on_white(img)
+        img.thumbnail((1024, 1024))
+        return img
+
+    client = config.client_for("meta")
+    resp = client.responses.parse(
+        model=config.REASON_MODEL,
+        instructions=("You check a product photo redrawn from a real clothing item. Image 1 is the real item as "
+                      "scanned (it may be crumpled or folded). Image 2 is the redraw. List the real item's defining "
+                      "details, then any that the redraw lost, flattened or simplified, and anything it added. Ignore "
+                      "creases, folds, lighting and inside labels. Be strict about structure: a ruffle, frill, tier or "
+                      "attached skirt that is missing makes it a different garment."),
+        input=[{"role": "user", "content": [
+            {"type": "input_text", "text": f"Image 1, the real item, tagged as: {tags.render_line()}"},
+            {"type": "input_image", "image_url": to_data_url(fit(cutout))},
+            {"type": "input_text", "text": "Image 2, the redraw:"},
+            {"type": "input_image", "image_url": to_data_url(fit(shot))},
+        ]}],
+        text_format=DetailCheck,
+        reasoning={"effort": "low"},
+    )
+    return resp.output_parsed
 
 
 def colour_drift(cutout: Image.Image, product: Image.Image) -> float:

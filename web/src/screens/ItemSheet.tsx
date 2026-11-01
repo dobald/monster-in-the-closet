@@ -28,7 +28,11 @@ export default function ItemSheet({ item, ctx, onClose }: { item: Item; ctx: App
   const remove = async () => {
     try {
       await api.deleteItem(current.id);
-      ctx.toast(`${itemName(current)} removed from your closet.`);
+      const id = current.id;
+      ctx.toast(`${itemName(current)} removed from your closet.`, {
+        label: "Undo",
+        run: () => api.restoreItem(id).then(() => ctx.bumpWardrobe()).catch((e) => ctx.toast((e as Error).message)),
+      });
       ctx.bumpWardrobe();
       onClose();
     } catch (e) {
@@ -109,6 +113,21 @@ export default function ItemSheet({ item, ctx, onClose }: { item: Item; ctx: App
             </div>
           )}
         </div>
+
+        {tidy ? (
+          <span className="small" style={{ fontSize: 12, marginTop: -4 }}>
+            Redrawn photo missing a detail?{" "}
+            <button type="button" className="press" disabled={!!busy} style={{ border: 0, background: "none", padding: 0, textDecoration: "underline", fontSize: "inherit", color: "inherit", fontWeight: 700 }}
+              onClick={() => run("Switching to your scan", () => api.choosePhoto(current.id, "scan"), "Showing your own scan from now on.")}>
+              Use my scan
+            </button>
+            {" · "}
+            <button type="button" className="press" disabled={!!busy} style={{ border: 0, background: "none", padding: 0, textDecoration: "underline", fontSize: "inherit", color: "inherit", fontWeight: 700 }}
+              onClick={() => run("Starting a redraw", () => api.choosePhoto(current.id, "redraw"), "Redrawing it in the background (about 30 seconds), checked against your scan.")}>
+              Redraw
+            </button>
+          </span>
+        ) : null}
 
         <h1 className="display" style={{ fontSize: 30, lineHeight: 1.05 }}>{itemName(current)}</h1>
         <span className="small">

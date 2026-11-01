@@ -204,6 +204,19 @@ class SameGarment(BaseModel):
     confidence: float = Field(description="0-1: how sure you are of same_item.")
 
 
+class DetailCheck(BaseModel):
+    """Does a redrawn product shot keep everything that makes the real garment what it is?
+    Observations come before the verdict, like the other judges."""
+
+    real_details: str = Field(description="The defining details of the real garment in image 1: ruffles, frills, tiers, "
+                                          "an attached skirt or peplum, lace, smocking, bows, pleats, cut-outs, prints, "
+                                          "logos, buttons, pockets, collar and sleeve shape.")
+    missing_details: list[str] = Field(description="Defining details of image 1 that image 2 lost or flattened, e.g. "
+                                                   "'ruffled skirt attached at the waist'. Empty if none.")
+    added_details: list[str] = Field(description="Things image 2 shows that the real garment doesn't have. Empty if none.")
+    same_garment: bool = Field(description="True if image 2 reads as the same garment, ignoring folds, creases and lighting.")
+
+
 class PersonPhotoCheck(BaseModel):
     """Is a user's photo usable for the face version of try-on?"""
 

@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from "react";
-import { api, itemName, type Scan as ScanResult } from "../api";
+import { api, type Scan as ScanResult } from "../api";
 import type { AppCtx } from "../App";
 import Oni from "../Oni";
 import { MergedNote, ReviewPairs } from "./Duplicates";
+import { FoundGrid, markScanned, needsCheck, ScanHowTo } from "./ScanGuide";
 
-// Flat-lay scan (wireframe 1a/1b): pick or shoot 1-10 photos of up to 8 items each (one is fine), send them as one batch,
-// then show the cutouts the oni found.
+// Flat-lay scan (wireframe 1a/1b): take or choose 1-10 photos of up to 8 items each (one is fine), send them as one
+// batch, then show the cutouts the oni found, each one fixable or removable on the spot.
 
 const MAX = 10;
 
@@ -20,6 +21,7 @@ export default function Scan({ ctx }: { ctx: AppCtx }) {
   const [result, setResult] = useState<ScanResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const input = useRef<HTMLInputElement>(null);
+  const camera = useRef<HTMLInputElement>(null);
 
   useEffect(() => () => shots.forEach((s) => s.url && URL.revokeObjectURL(s.url)), [shots]);
 
@@ -39,7 +41,9 @@ export default function Scan({ ctx }: { ctx: AppCtx }) {
       const r = await api.scan(shots.map((s) => s.file));
       setResult(r);
       setShots([]);
+      markScanned();
       ctx.bumpWardrobe();
+      if (r.sample_removed) ctx.toast(`Your own clothes are in, so I took out the ${r.sample_removed} sample pieces.`);
       // Pre-dress the mannequin with the new pieces in the background, so try-on is instant later.
       api.tryonProfile()
         .then((p) => {
@@ -69,10 +73,12 @@ export default function Scan({ ctx }: { ctx: AppCtx }) {
         </span>
       </header>
 
+      {!busy && <ScanHowTo />}
+
       <div
         style={{
           position: "relative",
-          height: 330,
+          height: shots.length || busy ? 330 : 150,
           border: "var(--line)",
           borderRadius: 12,
           overflow: "hidden",
@@ -133,18 +139,11 @@ export default function Scan({ ctx }: { ctx: AppCtx }) {
           </div>
         ) : (
           <p style={{ position: "absolute", left: 30, right: 30, top: 34, margin: 0, padding: "8px 10px", borderRadius: 8, background: "var(--washi)", border: "var(--line)", fontSize: 14, fontWeight: 700, lineHeight: 1.35, textAlign: "center" }}>
-            Lay up to 8 pieces flat, even just one or two, and take a photo. Spread them out so they don't overlap.
+            Your photos show up here. Take one now, or choose some from your phone.
           </p>
         )}
       </div>
 
-      <div role="group" aria-label="Tips" style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-        {["Bed or floor", "No overlaps", "Print side up", "Good light"].map((t) => (
-          <span key={t} style={{ fontSize: 11, fontWeight: 700, padding: "3px 8px", borderRadius: 12, border: "var(--line)" }}>
-            {t}
-          </span>
-        ))}
-      </div>
 
       {ctx.health?.mode === "fixture" && (
         <p className="small" style={{ margin: 0, padding: "8px 10px", border: "1.5px dashed var(--shu)", borderRadius: 8 }}>
@@ -159,32 +158,34 @@ export default function Scan({ ctx }: { ctx: AppCtx }) {
         </p>
       )}
 
-      <input
-        ref={input}
-        type="file"
-        accept="image/*,.heic,.heif"
-        multiple
-        hidden
-        onChange={(e) => {
-          add(e.target.files);
-          e.target.value = "";
-        }}
-      />
-      <div style={{ display: "flex", gap: 12, alignItems: "center", paddingRight: 3, marginTop: 4 }}>
-        <button
-          type="button"
-          className="press"
-          aria-label="Add photos"
-          disabled={busy || shots.length >= MAX}
-          onClick={() => input.current?.click()}
-          style={{ flex: "none", width: 66, height: 66, borderRadius: "50%", border: "var(--line)", background: "var(--shu)", boxShadow: "3px 3px 0 var(--sumi)", display: "flex", alignItems: "center", justifyContent: "center" }}
-        >
-          <span aria-hidden="true" style={{ width: 26, height: 26, borderRadius: "50%", border: "3px solid #fff" }} />
+      {[input, camera].map((ref, n) => (
+        <input
+          key={n}
+          ref={ref}
+          type="file"
+          accept="image/*,.heic,.heif"
+          multiple={n === 0}
+          capture={n === 1 ? "environment" : undefined}
+          hidden
+          onChange={(e) => {
+            add(e.target.files);
+            e.target.value = "";
+          }}
+        />
+      ))}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, paddingRight: 3, marginTop: 4 }}>
+        <button type="button" className="btn shu press" style={{ height: 52 }} disabled={busy || shots.length >= MAX} onClick={() => camera.current?.click()}>
+          Take a photo
         </button>
-        <button type="button" className="btn primary press" style={{ flex: 1, height: 52 }} disabled={busy || !shots.length} onClick={build}>
-          {busy ? "Scanning…" : shots.length ? `Build my closet (${shots.length}) →` : "Add a photo first"}
+        <button type="button" className="btn press" style={{ height: 52 }} disabled={busy || shots.length >= MAX} onClick={() => input.current?.click()}>
+          Choose photos
         </button>
       </div>
+      {shots.length > 0 && (
+        <button type="button" className="btn primary press block" style={{ height: 52 }} disabled={busy} onClick={build}>
+          {busy ? "Scanning…" : `Scan ${shots.length} photo${shots.length === 1 ? "" : "s"} →`}
+        </button>
+      )}
       <span className="small">Photos go to Meta only to find your clothes. We keep just the cutouts.</span>
     </main>
   );
@@ -192,12 +193,14 @@ export default function Scan({ ctx }: { ctx: AppCtx }) {
 
 function ScanDone({ result, again, ctx }: { result: ScanResult; again: () => void; ctx: AppCtx }) {
   const [review, setReview] = useState(result.duplicates?.review ?? []);
+  const [items, setItems] = useState(result.items);
+  const unsure = items.filter(needsCheck).length;
   return (
     <main className="screen">
       <header style={{ display: "flex", alignItems: "center", gap: 12 }}>
         <Oni mood="fed" size={70} />
         <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-          <h1 className="display" style={{ fontSize: 36 }}>{result.replayed ? "DEMO SCAN" : `FOUND ${result.items.length}!`}</h1>
+          <h1 className="display" style={{ fontSize: 36 }}>{result.replayed ? "DEMO SCAN" : `FOUND ${items.length}!`}</h1>
           <span className="label" style={{ fontWeight: 400 }}>
             {result.photos} PHOTO{result.photos === 1 ? "" : "S"} · {result.seconds.toFixed(1)}S{result.replayed ? " · DEMO REPLAY" : ""}
             {result.cached_photos ? ` · ${result.cached_photos} CACHED` : ""}
@@ -213,21 +216,22 @@ function ScanDone({ result, again, ctx }: { result: ScanResult; again: () => voi
       {result.duplicates && <MergedNote dupes={result.duplicates} />}
       <ReviewPairs pairs={review} ctx={ctx} onResolved={(p) => setReview(review.filter((x) => x !== p))} />
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 10 }}>
-        {result.items.map((it, i) => (
-          <button
-            key={it.id}
-            type="button"
-            onClick={() => ctx.openItem(it)}
-            style={{ display: "flex", flexDirection: "column", gap: 4, padding: 0, border: 0, background: "transparent", textAlign: "left", animation: `rise .35s ease-out ${(0.06 * i).toFixed(2)}s both` }}
-          >
-            <span className="halftone" style={{ display: "block", aspectRatio: "1", border: "var(--line)", borderRadius: 8, padding: 6 }}>
-              <img className="cutout" src={it.photo_url} alt="" />
-            </span>
-            <span style={{ fontSize: 12, fontWeight: 700, lineHeight: 1.2 }}>{itemName(it)}</span>
-          </button>
-        ))}
-      </div>
+      {!!result.sample_removed && (
+        <span className="small">Your own clothes are in, so the {result.sample_removed} sample pieces are gone.</span>
+      )}
+      <p className="small" style={{ margin: 0 }}>
+        <strong>Check what I found.</strong> Tap a piece to fix what it is; ✕ removes a bad cut-out.
+        {unsure > 0 && <> I'm unsure about {unsure}: they're marked <strong style={{ color: "var(--shu)" }}>CHECK?</strong></>}
+      </p>
+      {result.warnings?.map((w) => (
+        <p key={w} className="small" style={{ margin: 0, padding: "8px 10px", border: "1.5px dashed var(--shu)", borderRadius: 8 }}>{w}</p>
+      ))}
+      <FoundGrid
+        items={items}
+        ctx={ctx}
+        onRemoved={(ids) => setItems((now) => now.filter((i) => !ids.includes(i.id)))}
+        onRestored={(back) => setItems((now) => [...now, ...back.filter((b) => !now.some((i) => i.id === b.id))])}
+      />
 
       {result.dropped.length > 0 && (
         <span className="small muted">

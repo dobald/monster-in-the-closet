@@ -103,7 +103,7 @@ def test_live_mode_caches(var_dir: Path) -> None:
             scan.ScanItem(source, batch, "2", (0, 0, 1, 1), 0.3, cutout_png((5, 5, 5)), kept=False, reason="low confidence"),
         ]
 
-    def fake_tag(img, provider=None):
+    def fake_tag(img, provider=None, hint="", notes=""):
         from closet.schema import Garment
         calls["tag"] += 1
         return Garment.model_validate(GARMENT)
@@ -859,7 +859,7 @@ def test_products(var_dir: Path) -> None:
         return [scan.ScanItem(source, batch, "0", (0, 0, 1, 1), 0.9, cutout_png((30, 40, 90))),
                 scan.ScanItem(source, batch, "1", (0, 0, 1, 1), 0.9, cutout_png((200, 30, 30)))]
 
-    def fake_tag(img, provider=None):
+    def fake_tag(img, provider=None, hint="", notes=""):
         from closet.schema import Garment
         return Garment.model_validate(GARMENT)
 
@@ -879,6 +879,10 @@ def test_products(var_dir: Path) -> None:
     pipeline.scan.scan_image, pipeline.models.tag_garment = fake_scan_image, fake_tag
     pipeline.config.async_client_for = lambda provider="meta": None
     products_mod.models._edit, products_mod.products.cut = fake_edit, fake_cut
+    from closet.schema import DetailCheck
+    orig_check = products_mod.products.check_details
+    products_mod.products.check_details = lambda cut, shot, tags: DetailCheck(
+        real_details="plain", missing_details=[], added_details=[], same_garment=True)
     try:
         with client_for("live", var_dir) as c:
             items = c.post("/api/scans", files=[("photos", ("bed.jpg", photo_bytes(3), "image/jpeg"))]).json()["items"]
@@ -902,6 +906,7 @@ def test_products(var_dir: Path) -> None:
     finally:
         (pipeline.scan.scan_image, pipeline.models.tag_garment, pipeline.config.async_client_for,
          products_mod.models._edit, products_mod.products.cut) = orig
+        products_mod.products.check_details = orig_check
 
 
 
@@ -944,7 +949,8 @@ def test_occasions(var_dir: Path) -> None:
     today = tools.ics_events(ics, d.today())
     assert [e["title"] for e in today] == ["Design studio"], today
     from datetime import datetime, timezone
-    local = datetime(first.year, first.month, first.day, 15, tzinfo=timezone.utc).astimezone().strftime("%H:%M")
+    # Today's occurrence in local time (not the first one's: clocks may have changed in between).
+    local = datetime(d.today().year, d.today().month, d.today().day, 15, tzinfo=timezone.utc).astimezone().strftime("%H:%M")
     assert today[0]["start"] == local, (today, local)
     assert tools.ics_events(ics, d.today() + timedelta(days=7)) == [], "the cancelled week is gone"
     assert [e["title"] for e in tools.ics_events(ics, d.today() + timedelta(days=14))] == ["Design studio"]
@@ -1125,7 +1131,7 @@ def test_corrections(var_dir: Path) -> None:
 
     seen = {}
 
-    def fake_tag(img, provider=None, hint=""):
+    def fake_tag(img, provider=None, hint="", notes=""):
         seen["hint"] = hint
         return Garment.model_validate({**GARMENT, "subtype": "zip-up hoodie" if hint else "dress", "category": "outerwear" if hint else "dress"})
 
@@ -1219,6 +1225,146 @@ def test_hardening(var_dir: Path) -> None:
     assert len(events) == 1 and time.time() - t0 < 2, (len(events), time.time() - t0)
 
 
+
+def test_scan_fixes(var_dir: Path) -> None:
+    """Real scans replace the sample closet; the tagger gets outline measurements; removing a piece forgets it."""
+    from PIL import Image, ImageDraw
+
+    from closet.schema import Garment
+    from server import pipeline, products as products_mod
+
+    # A T-shape (a tee with sleeves) fills much less of its outline's hull than a flat square (a bandana).
+    tee = Image.new("RGBA", (200, 200), (0, 0, 0, 0))
+    d = ImageDraw.Draw(tee)
+    d.rectangle([60, 40, 140, 190], fill=(20, 20, 90, 255))
+    d.rectangle([10, 40, 190, 80], fill=(20, 20, 90, 255))
+    square = cutout_png((200, 30, 30), size=(150, 150))
+    note_tee, note_sq = scan.shape_notes(tee, 1.0), scan.shape_notes(square, 0.3)
+    fill = lambda n: int(n.split("fills ")[1].split("%")[0])  # noqa: E731
+    assert fill(note_tee) < 85 <= 95 <= fill(note_sq), (note_tee, note_sq)
+    assert "30% the size of the largest item" in note_sq
+
+    seen = []
+
+    def fake_tag(img, provider=None, hint="", notes=""):
+        seen.append(notes)
+        return Garment.model_validate(GARMENT)
+
+    async def fake_scan_image(client, photo, batch, source):
+        return [scan.ScanItem(source, batch, "0", (0, 0, 1, 1), 0.9, tee),
+                scan.ScanItem(source, batch, "1", (0, 0, 1, 1), 0.9, square)]
+
+    orig = (pipeline.scan.scan_image, pipeline.models.tag_garment, pipeline.config.async_client_for, products_mod.models._edit)
+    pipeline.scan.scan_image, pipeline.models.tag_garment = fake_scan_image, fake_tag
+    pipeline.config.async_client_for = lambda provider="meta": None
+    products_mod.models._edit = lambda images, prompt: (None, "stubbed")
+    try:
+        with client_for("live", var_dir) as c:
+            assert c.post("/api/closet/sample").json()["imported"] == 9
+            r = c.post("/api/scans", files=[("photos", ("mine.jpg", photo_bytes(11), "image/jpeg"))]).json()
+            assert r["sample_removed"] == 9, r.get("sample_removed")
+            items = c.get("/api/wardrobe").json()
+            assert len(items) == 2 and all(i["source"] == "mine.jpg" for i in items), "only their own clothes are left"
+            assert len(seen) == 2 and all("Measured from the cutout" in n for n in seen), seen
+            assert any("the size of the largest item in the same photo" in n for n in seen)
+
+            # Removing is undoable for two days, then the piece and its wear history are deleted for good.
+            gone = items[0]["id"]
+            c.post("/api/wardrobe/last-worn", json={"items": [{"id": gone, "days_ago": 1}]})
+            c.post("/api/plans/x/wear", json={"look": 0})
+            assert c.delete(f"/api/wardrobe/{gone}").status_code == 204
+            assert gone not in {i["id"] for i in c.get("/api/wardrobe").json()} and c.get(f"/api/wardrobe/{gone}").status_code == 404
+            back = c.post(f"/api/wardrobe/{gone}/restore").json()
+            assert back["id"] == gone and back["last_worn"] is not None, "Undo brings it back as it was"
+            assert c.post(f"/api/wardrobe/{gone}/restore").status_code == 404, "nothing left to undo"
+            closet = main.app.state.closets.get("main")
+            c.delete(f"/api/wardrobe/{gone}")
+            closet.store._db.execute("UPDATE items SET removed_at = '2000-01-01T00:00:00+00:00' WHERE id = ?", (gone,))
+            closet.store._db.commit()
+            closet.store._purge_removed()
+            assert closet.store.get_item(gone, include_removed=True) is None
+            assert not (closet.settings.cutout_dir / f"{gone}.png").exists(), "the purge deletes the cutout too"
+            c.post("/api/closet/sample")
+            assert c.delete("/api/closet/sample").json()["removed"] == 9 and len(c.get("/api/wardrobe").json()) == 1
+            assert c.get("/api/scan-guide/good.jpg").status_code == 200 and c.get("/api/scan-guide/x.jpg").status_code == 404
+    finally:
+        pipeline.scan.scan_image, pipeline.models.tag_garment, pipeline.config.async_client_for, products_mod.models._edit = orig
+
+
+
+def test_round_two(var_dir: Path) -> None:
+    """Light-on-light photos get a warning, a redraw that lost a detail is retried then refused, and the owner
+    can keep their own scan instead."""
+    from PIL import Image, ImageDraw
+
+    from closet.schema import DetailCheck, Garment
+    from server import pipeline, products as products_mod
+
+    def flat(bg, fg):
+        im = Image.new("RGB", (600, 400), bg)
+        ImageDraw.Draw(im).rectangle([200, 100, 400, 300], fill=fg)
+        return im
+
+    piece = lambda fg: scan.ScanItem("p.jpg", 0, "0", (0, 0, 1, 1), 0.9, Image.new("RGBA", (200, 200), (*fg, 255)))  # noqa: E731
+    assert "close in colour" in scan.contrast_warning(flat((240, 238, 235), (250, 250, 248)), [piece((250, 250, 248))])
+    assert scan.contrast_warning(flat((70, 55, 45), (250, 250, 248)), [piece((250, 250, 248))]) is None
+    from closet import media
+    assert media.for_segmentation(flat((240, 238, 235), (250, 250, 248))).size == (600, 400)
+
+    edits, checks = [], []
+
+    def fake_edit(images, prompt):
+        edits.append(prompt)
+        return images[0], "ok"
+
+    async def fake_cut(client, photo, noun, open_shape=False):
+        return cutout_png((90, 90, 120))
+
+    def fake_check(cut, shot, tags):
+        checks.append(1)
+        return DetailCheck(real_details="ruffled skirt attached at the waist", missing_details=["ruffled skirt"],
+                           added_details=[], same_garment=False)
+
+    async def fake_scan_image(client, photo, batch, source):
+        return [scan.ScanItem(source, batch, "0", (0, 0, 1, 1), 0.9, cutout_png((90, 90, 120)))]
+
+    def fake_tag(img, provider=None, hint="", notes=""):
+        return Garment.model_validate({**GARMENT, "subtype": "ruffle-hem tank top", "distinctive_details": "ruffled skirt"})
+
+    orig = (pipeline.scan.scan_image, pipeline.models.tag_garment, pipeline.config.async_client_for,
+            products_mod.models._edit, products_mod.products.cut, products_mod.products.check_details)
+    pipeline.scan.scan_image, pipeline.models.tag_garment = fake_scan_image, fake_tag
+    pipeline.config.async_client_for = lambda provider="meta": None
+    products_mod.models._edit, products_mod.products.cut, products_mod.products.check_details = fake_edit, fake_cut, fake_check
+    try:
+        import time
+        with client_for("live", var_dir) as c:
+            item = c.post("/api/scans", files=[("photos", ("frill.jpg", photo_bytes(21), "image/jpeg"))]).json()["items"][0]
+            for _ in range(100):
+                if not c.get("/api/products").json()["running"] and len(checks) >= 2:
+                    break
+                time.sleep(0.05)
+            assert len(edits) == 2 and "ruffled skirt" in edits[1] and "must be there this time" in edits[1], edits
+            note = json.loads((main.app.state.products.dir / f"{item['id']}.json").read_text())
+            assert not note["ok"] and "lost details" in note["reason"], note
+            assert c.get(f"/api/wardrobe/{item['id']}").json()["photo_url"].endswith(".png"), "the scan is shown instead"
+
+            # "Use my scan" sticks; "Redraw" tries again.
+            assert c.post(f"/api/wardrobe/{item['id']}/photo", json={"use": "scan"}).status_code == 200
+            assert "chose their scan" in json.loads((main.app.state.products.dir / f"{item['id']}.json").read_text())["reason"]
+            c.post("/api/products")
+            assert len(edits) == 2, "a scan the owner chose is never redrawn on its own"
+            assert c.post(f"/api/wardrobe/{item['id']}/photo", json={"use": "redraw"}).status_code == 200
+            for _ in range(100):
+                if len(edits) >= 4 and not c.get("/api/products").json()["running"]:
+                    break
+                time.sleep(0.05)
+            assert len(edits) == 4, edits
+    finally:
+        (pipeline.scan.scan_image, pipeline.models.tag_garment, pipeline.config.async_client_for,
+         products_mod.models._edit, products_mod.products.cut, products_mod.products.check_details) = orig
+
+
 def main_() -> None:
     tmp = Path(tempfile.mkdtemp(prefix="monster-test-"))
     run_dir = config.ROOT / "out" / f"_test_seed_{tmp.name}"
@@ -1256,8 +1402,10 @@ def main_() -> None:
         test_inside_labels()
         test_corrections(tmp / "corrections")
         test_hardening(tmp / "hardening")
+        test_scan_fixes(tmp / "scanfix")
+        test_round_two(tmp / "round2")
         print("OK: fixture mode, seeding, tag fixes, caching, dedupe, planning, wear, check-ins, the agent loop, gap finder, try-on, layered try-on, getting started, finishing touches, colour reads, "
-              "cross-photo duplicates, per-device closets, the sample closet, plans made ahead, the morning wear question, the taste model, outfit scoring, style archetypes, product shots, occasions, calendar links, the spend cap, app serving, layer occlusion, item corrections and the public-deploy hardening all behave.")
+              "cross-photo duplicates, per-device closets, the sample closet, plans made ahead, the morning wear question, the taste model, outfit scoring, style archetypes, product shots, occasions, calendar links, the spend cap, app serving, layer occlusion, item corrections the public-deploy hardening and the scan fixes all behave.")
     finally:
         shutil.rmtree(run_dir, ignore_errors=True)
         shutil.rmtree(tmp, ignore_errors=True)

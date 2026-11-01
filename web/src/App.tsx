@@ -22,6 +22,11 @@ type Overlay =
   | { kind: "tryon"; plan: Plan | null; lookIndex: number | null; setupOnly: boolean }
   | null;
 
+export interface ToastAction {
+  label: string;
+  run: () => void;
+}
+
 export interface AppCtx {
   oni: OniState | null;
   health: Health | null;
@@ -33,7 +38,7 @@ export interface AppCtx {
   openTryOn: (plan: Plan, lookIndex: number) => void;
   openTryOnSetup: () => void;
   openSetup: () => void; // reopen getting started (from the location step) to change location or calendar
-  toast: (msg: string) => void;
+  toast: (msg: string, action?: ToastAction) => void; // an action ("Undo") keeps the toast up a little longer
   wardrobeVersion: number;
   bumpWardrobe: () => void;
   refreshKey: number; // bumps whenever an overlay closes, so screens behind it can re-read settings
@@ -46,7 +51,7 @@ export default function App() {
   const [overlay, setOverlay] = useState<Overlay>(null);
   const [oni, setOni] = useState<OniState | null>(null);
   const [health, setHealth] = useState<Health | null>(null);
-  const [toastMsg, setToastMsg] = useState<string | null>(null);
+  const [toastMsg, setToast] = useState<{ msg: string; action?: ToastAction } | null>(null);
   const [wardrobeVersion, setWardrobeVersion] = useState(0);
   const [refreshKey, setRefreshKey] = useState(0);
   // First run shows getting started instead of the tabs; "edit" reopens it from Notes.
@@ -62,7 +67,7 @@ export default function App() {
       url.searchParams.delete("closet");
       window.history.replaceState(null, "", url.pathname + url.search + url.hash);
     }
-    (linked ? api.openCloset(linked).then(() => setToastMsg("Opened your closet on this device.")).catch((e) => setToastMsg((e as Error).message)) : Promise.resolve())
+    (linked ? api.openCloset(linked).then(() => setToast({ msg: "Opened your closet on this device." })).catch((e) => setToast({ msg: (e as Error).message })) : Promise.resolve())
       .then(() => api.profile())
       .then((p) => setOnboarding(p.onboarded ? null : "first"))
       .catch(() => setOnboarding(null));
@@ -76,7 +81,7 @@ export default function App() {
 
   useEffect(() => {
     if (!toastMsg) return;
-    const t = setTimeout(() => setToastMsg(null), 3200);
+    const t = setTimeout(() => setToast(null), toastMsg.action ? 7000 : 3200);
     return () => clearTimeout(t);
   }, [toastMsg]);
 
@@ -96,7 +101,7 @@ export default function App() {
     openTryOn: (plan, lookIndex) => setOverlay({ kind: "tryon", plan, lookIndex, setupOnly: false }),
     openTryOnSetup: () => setOverlay({ kind: "tryon", plan: null, lookIndex: null, setupOnly: true }),
     openSetup: () => setOnboarding("edit"),
-    toast: setToastMsg,
+    toast: (msg, action) => setToast({ msg, action }),
     wardrobeVersion,
     bumpWardrobe: () => setWardrobeVersion((v) => v + 1),
     refreshKey,
@@ -149,7 +154,20 @@ export default function App() {
         />
         {toastMsg && (
           <div className="toast" role="status" style={{ bottom: 24 }}>
-            {toastMsg}
+            {toastMsg.msg}
+            {toastMsg.action && (
+              <button
+                type="button"
+                className="chip press"
+                style={{ marginLeft: 10, height: 28, fontSize: 12 }}
+                onClick={() => {
+                  toastMsg.action!.run();
+                  setToast(null);
+                }}
+              >
+                {toastMsg.action.label}
+              </button>
+            )}
           </div>
         )}
       </div>
@@ -183,7 +201,20 @@ export default function App() {
 
       {toastMsg && (
         <div className="toast" role="status">
-          {toastMsg}
+          {toastMsg.msg}
+            {toastMsg.action && (
+              <button
+                type="button"
+                className="chip press"
+                style={{ marginLeft: 10, height: 28, fontSize: 12 }}
+                onClick={() => {
+                  toastMsg.action!.run();
+                  setToast(null);
+                }}
+              >
+                {toastMsg.action.label}
+              </button>
+            )}
         </div>
       )}
     </div>
