@@ -150,16 +150,7 @@ export default function Today({ ctx }: { ctx: AppCtx }) {
           <div
             aria-hidden="true"
             style={{ position: "absolute", inset: "6px -2px -6px 10px", border: "var(--line)", borderRadius: 12, background: "var(--paper)", transform: "rotate(3deg)" }}
-          >
-            {plan && plan.looks.length > 1 && (
-              <span
-                className="label"
-                style={{ position: "absolute", top: -1, right: 18, fontSize: 9, padding: "2px 6px", background: "var(--sumi)", color: "var(--washi)", borderRadius: "0 0 4px 4px" }}
-              >
-                NEXT · LOOK {LOOK_LETTERS[(lookIndex + 1) % plan.looks.length]}
-              </span>
-            )}
-          </div>
+          />
           <div
             aria-hidden="true"
             style={{ position: "absolute", inset: "4px 8px -4px -2px", border: "var(--line)", borderRadius: 12, background: "var(--washi-2)", transform: "rotate(-2deg)" }}
@@ -228,27 +219,19 @@ export default function Today({ ctx }: { ctx: AppCtx }) {
                 ›
               </button>
             </div>
-            {load.state === "ready" && looks > 1 && (
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: -4 }}>
-                <span className="label" style={{ fontWeight: 400, fontSize: 10 }}>SWIPE FOR MORE LOOKS ⇆</span>
+            {load.state === "ready" && look && (
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginTop: -2 }}>
                 <button type="button" className="chip press" style={{ height: 28, fontSize: 12 }} onClick={() => replan(plan?.notes ?? "", true)}
                   aria-label="Ask the oni for new picks">
                   ↻ New picks
                 </button>
+                {!full && (
+                  <button type="button" className="press" aria-expanded={more} onClick={() => setMore(!more)}
+                    style={{ border: 0, background: "transparent", padding: "2px 0", fontWeight: 700, fontSize: 13 }}>
+                    {more ? "Less ▴" : "Touches & tweaks ▾"}
+                  </button>
+                )}
               </div>
-            )}
-
-            {!full && load.state === "ready" && look && (
-              <button
-                type="button"
-                className="press"
-                aria-expanded={more}
-                onClick={() => setMore(!more)}
-                style={{ border: 0, background: "transparent", padding: "2px 0", display: "flex", justifyContent: "space-between", fontWeight: 700, fontSize: 13 }}
-              >
-                <span>{more ? "Less" : "More: finishing touches, colours, tweaks"}</span>
-                <span aria-hidden="true">{more ? "▴" : "▾"}</span>
-              </button>
             )}
             {open && load.state === "ready" && look && <Touches plan={plan!} lookIndex={lookIndex} ctx={ctx} />}
 
@@ -266,15 +249,6 @@ export default function Today({ ctx }: { ctx: AppCtx }) {
                   {adjust[a.label] ? " ✓" : ""}
                 </button>
               ))}
-              <button
-                type="button"
-                className="chip shu press"
-                disabled={load.state !== "ready"}
-                onClick={() => replan(plan?.notes ?? "", true)}
-                aria-label="Ask the oni for a fresh pick"
-              >
-                Re-roll ↻
-              </button>
             </div>}
           </div>
         </section>

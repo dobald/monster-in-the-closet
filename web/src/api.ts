@@ -392,6 +392,13 @@ export interface Place {
   lon: number;
 }
 
+// Fabric families (closet/materials.py): loved ones nudge the picks, avoided ones stay out unless nothing else works.
+export type MaterialFamily = "cotton" | "denim" | "linen" | "wool" | "silk" | "leather" | "fleece" | "synthetic";
+export interface Materials {
+  love: MaterialFamily[];
+  avoid: MaterialFamily[];
+}
+
 export interface Profile {
   location: Place | null;
   calendar: "none" | "sample" | "ics" | "link"; // link: a private iCal address that refreshes itself
@@ -400,6 +407,8 @@ export interface Profile {
   wardrobe: Partial<Record<Category, number>>;
   can_plan: boolean; // a top + a bottom, or a dress
   tryon: TryOnProfile;
+  materials: Materials;
+  materials_owned: Record<MaterialFamily, number>;
 }
 
 export interface Health {
@@ -508,7 +517,7 @@ export const api = {
   setThrift: (id: number, status: ThriftStatus) => call<void>(`/api/thrift/${id}`, json("PATCH", { status })),
   removeThrift: (id: number) => call<void>(`/api/thrift/${id}`, { method: "DELETE" }),
   profile: () => call<Profile>("/api/profile"),
-  updateProfile: (changes: { location?: Place; calendar?: Profile["calendar"]; onboarded?: boolean }) =>
+  updateProfile: (changes: { location?: Place; calendar?: Profile["calendar"]; onboarded?: boolean; materials?: Materials }) =>
     call<Profile>("/api/profile", json("PUT", changes)),
   uploadCalendar: (file: File) => {
     const form = new FormData();

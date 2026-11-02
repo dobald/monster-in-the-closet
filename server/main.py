@@ -23,7 +23,7 @@ from fastapi.responses import FileResponse, RedirectResponse
 from PIL import Image, UnidentifiedImageError
 from pydantic import BaseModel, Field, ValidationError
 
-from closet import config
+from closet import config, materials
 from closet.schema import Garment
 
 from . import settings as settings_mod
@@ -829,10 +829,19 @@ class Location(BaseModel):
     lon: float
 
 
+MaterialFamily = Literal["cotton", "denim", "linen", "wool", "silk", "leather", "fleece", "synthetic"]
+
+
+class MaterialsIn(BaseModel):
+    love: list[MaterialFamily] = []
+    avoid: list[MaterialFamily] = []
+
+
 class ProfileIn(BaseModel):
     location: Location | None = None
     calendar: Literal["none", "sample", "ics", "link"] | None = None
     onboarded: bool | None = None
+    materials: MaterialsIn | None = None
 
 
 class PreferenceIn(BaseModel):
@@ -848,10 +857,12 @@ def _profile_out() -> dict:
     planning = C().planning
     p = planning.profile()
     counts = {}
-    for i in C().store.list_items():
+    items = C().store.list_items()
+    for i in items:
         if i["tags"]:
             counts[i["tags"]["category"]] = counts.get(i["tags"]["category"], 0) + 1
-    return {**p, "wardrobe": counts, "can_plan": bool(counts.get("dress") or (counts.get("top") and counts.get("bottom"))),
+    return {**p, "wardrobe": counts, "materials_owned": materials.owned(items),
+            "can_plan": bool(counts.get("dress") or (counts.get("top") and counts.get("bottom"))),
             "tryon": C().tryon.public_profile()}
 
 
@@ -912,6 +923,8 @@ def put_profile(body: ProfileIn) -> dict:
     if body.calendar == "link" and not C().planning.calendar_link_path.exists():
         raise HTTPException(422, "Connect a calendar link first.")
     changes = body.model_dump(exclude_none=True)
+    if "materials" in changes:
+        changes["materials"] = materials.clean(changes["materials"])
     if changes.get("onboarded"):
         changes["onboarded_at"] = now_iso()
     C().planning.update_profile(**changes)
@@ -1142,8 +1155,12 @@ def seed(body: SeedIn) -> dict:
 @app.get("/{path:path}", include_in_schema=False)
 def web_app(path: str) -> FileResponse:
     """Files from the built front end (hashed assets are cached for good); any other path gets the app."""
-    if path.startswith("api/") or not (WEB_DIST / "index.html").exists():
-        raise HTTPException(404, "Not found.")
+    # A path with a dot anywhere (/.env, /.git/config, /server/main.py) that isn't in the build is a plain 404,
+    # not the app: app routes never have one, so only those fall back to index.html.
+    if path.startswith("api/") or not (WEB_DIST / "index.html").exists() or "." in path:
+        f = (WEB_DIST / path).resolve()
+        if not (WEB_DIST in f.parents and f.is_file()):
+            raise HTTPException(404, "Not found.")
     f = (WEB_DIST / path).resolve()
     if WEB_DIST in f.parents and f.is_file():
         immutable = f.parent.name == "assets"

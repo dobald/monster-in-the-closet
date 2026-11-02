@@ -1031,7 +1031,9 @@ def test_deploy(var_dir: Path) -> None:
             assert "<title>app</title>" in c.get("/").text and "<title>app</title>" in c.get("/closet/anything").text
             r = c.get("/assets/app-1.js")
             assert r.text == "console.log(1)" and "immutable" in r.headers["cache-control"], r.headers
-            assert c.get("/api/nope").status_code == 404 and c.get("/../.env").status_code in (404, 200)
+            assert c.get("/api/nope").status_code == 404
+            for probe in ("/.env", "/.git/config", "/server/main.py", "/var/wardrobe.sqlite3"):
+                assert c.get(probe).status_code == 404, f"{probe} must be a plain 404, not the app"
             assert "MODEL_API_KEY" not in c.get("/../.env").text
     finally:
         for k in ("MONSTER_CLOSET_DAILY_CALLS", "MONSTER_CLOSETS"):
@@ -1365,6 +1367,46 @@ def test_round_two(var_dir: Path) -> None:
          products_mod.models._edit, products_mod.products.cut, products_mod.products.check_details) = orig
 
 
+
+def test_materials(var_dir: Path) -> None:
+    """Fabric preferences: the tagger's free-text material sorts into families, a fabric they won't wear stays
+    out of the picks (and the Stretch), and a loved one is nudged up."""
+    from closet import materials
+
+    assert materials.families("cotton-blend fleece") == {"cotton", "fleece"}
+    assert materials.families("suiting twill, likely polyester-viscose blend") == {"synthetic"}
+    assert materials.families("faux leather") == {"synthetic"} and materials.families("suede") == {"leather"}
+    assert materials.clean({"love": ["wool", "cotton", "nope"], "avoid": ["wool"]}) == {"love": ["cotton"], "avoid": ["wool"]}
+    wool, tee = {"tags": {"material_guess": "merino knit"}}, {"tags": {"material_guess": "cotton jersey"}}
+    assert materials.score([wool, tee], {"avoid": ["wool"]}) < 0 < materials.score([tee], {"love": ["cotton"]})
+    assert materials.score([wool, tee], None) == 0
+
+    with client_for("fixture", var_dir) as c:
+        c.post("/api/closet/sample")
+        prof = c.get("/api/profile").json()
+        assert prof["materials"] == {"love": [], "avoid": []} and prof["materials_owned"]["wool"] == 3, prof["materials_owned"]
+        assert c.put("/api/profile", json={"materials": {"avoid": ["velvet"]}}).status_code == 422
+        prof = c.put("/api/profile", json={"materials": {"love": ["cotton", "wool"], "avoid": ["wool"]}}).json()
+        assert prof["materials"] == {"love": ["cotton"], "avoid": ["wool"]}, "a fabric can't be loved and avoided"
+
+        # Most of the sample closet is cotton: without a preference look A is cotton, avoiding it moves A to wool.
+        by_id = {i["id"]: i for i in c.get("/api/wardrobe").json()}
+        core = lambda look: [by_id[i]["tags"] for i in look["item_ids"] if by_id[i]["tags"]["category"] != "outerwear"]  # noqa: E731
+        c.put("/api/profile", json={"materials": {"love": [], "avoid": []}})
+        plain = c.post("/api/plan", json={"fresh": True}).json()
+        assert any("cotton" in t["material_guess"] for t in core(plain["looks"][0])), core(plain["looks"][0])
+        c.put("/api/profile", json={"materials": {"avoid": ["cotton"]}})
+        plan = c.post("/api/plan", json={"fresh": True}).json()
+        assert not any("cotton" in t["material_guess"] for t in core(plan["looks"][0])), core(plan["looks"][0])
+        assert plan["trace"]["scores"][0]["material"] < 0, "the cotton field jacket is the only layer: it costs, but stays"
+
+        # The preference is part of the plan's basis, so a plan made ahead before it changed isn't reused.
+        from server.main import C, today_local
+        before = C().planning.basis(today_local())
+        c.put("/api/profile", json={"materials": {"love": [], "avoid": []}})
+        assert C().planning.basis(today_local()) != before
+
+
 def main_() -> None:
     tmp = Path(tempfile.mkdtemp(prefix="monster-test-"))
     run_dir = config.ROOT / "out" / f"_test_seed_{tmp.name}"
@@ -1404,6 +1446,7 @@ def main_() -> None:
         test_hardening(tmp / "hardening")
         test_scan_fixes(tmp / "scanfix")
         test_round_two(tmp / "round2")
+        test_materials(tmp / "materials")
         print("OK: fixture mode, seeding, tag fixes, caching, dedupe, planning, wear, check-ins, the agent loop, gap finder, try-on, layered try-on, getting started, finishing touches, colour reads, "
               "cross-photo duplicates, per-device closets, the sample closet, plans made ahead, the morning wear question, the taste model, outfit scoring, style archetypes, product shots, occasions, calendar links, the spend cap, app serving, layer occlusion, item corrections the public-deploy hardening and the scan fixes all behave.")
     finally:

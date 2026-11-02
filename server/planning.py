@@ -16,7 +16,7 @@ from datetime import date, datetime, timedelta, timezone
 
 import numpy as np
 
-from closet import colour, config, gaps, occasions, planner, scoring, styles, styling, taste, tools
+from closet import colour, config, gaps, materials, occasions, planner, scoring, styles, styling, taste, tools
 from closet.schema import CheckinLearning, Look, OutfitPlan
 
 from . import calfeed
@@ -128,8 +128,17 @@ class Planning:
 
     def profile(self) -> dict:
         # Before getting started, keep the old behaviour: .env location and the sample calendar.
-        return {"location": None, "calendar": "sample", "calendar_name": None, "onboarded": False,
-                **(self.store.get_setting("profile") or {})}
+        p = {"location": None, "calendar": "sample", "calendar_name": None, "onboarded": False,
+             **(self.store.get_setting("profile") or {})}
+        return {**p, "materials": materials.clean(p.get("materials"))}
+
+    def fabrics(self) -> dict:
+        """Material families the person loves or won't wear (closet/materials.py)."""
+        return self.profile()["materials"]
+
+    def _prefs(self) -> list[dict]:
+        """Preferences the oni was told or learned at check-ins, plus the fabric ones from the profile."""
+        return self.store.list_preferences() + materials.prompt_lines(self.fabrics())
 
     def update_profile(self, **changes) -> dict:
         p = {**self.profile(), **{k: v for k, v in changes.items() if v is not None}}
@@ -156,7 +165,7 @@ class Planning:
     def basis(self, day: date) -> str:
         """What a plan was built from, minus the weather: if this changes, a plan made ahead is out of date."""
         snapshot = [(i["id"], i["tags"], i["last_worn"], i["wear_count"]) for i in sorted(self._garments(), key=lambda i: i["id"])]
-        return sha256(json.dumps([day.isoformat(), snapshot, [p["text"] for p in self.store.list_preferences()]],
+        return sha256(json.dumps([day.isoformat(), snapshot, [p["text"] for p in self._prefs()]],
                                  sort_keys=True, default=str).encode())[:16]
 
     def current_plan(self, day: date) -> dict | None:
@@ -194,7 +203,7 @@ class Planning:
             raise ValueError(gap)
         model = self.taste_model()
         picture = self.style_picture(items)
-        prefs = (self.store.list_preferences() + taste.prompt_lines(model)  # what it has learned rides along as preferences
+        prefs = (self._prefs() + taste.prompt_lines(model)  # what it has learned rides along as preferences
                  + styles.prompt_lines(picture["liked"], picture["grow"], picture["answers"]))
         weather = self.weather(day, lat, lon)
         read = None
@@ -384,7 +393,7 @@ class Planning:
             raise ValueError(gap)
         model = self.taste_model()
         picture = self.style_picture(items)
-        prefs = (self.store.list_preferences() + taste.prompt_lines(model)
+        prefs = (self._prefs() + taste.prompt_lines(model)
                  + styles.prompt_lines(picture["liked"], picture["grow"], picture["answers"]))
         thrift = self.store.list_thrift()
         watching = [t["name"] for t in thrift if t["status"] == "watching"]
@@ -466,12 +475,14 @@ class Planning:
         return taste.fit(self.taste_data()[0])
 
     def _scorer(self, weather: dict, calendar: dict, day: date, model: taste.Model, event: dict | None = None):
-        """closet/scoring.breakdown for this day (or one event): rescue, weather, occasion, colour and the learned taste."""
+        """closet/scoring.breakdown for this day (or one event): rescue, weather, occasion, colour, the learned taste
+        and the fabrics they love or won't wear."""
         ctx = scoring.day_context(weather, calendar, event)
+        fabrics = self.fabrics()
 
         def score(outfit: list[dict]) -> dict:
             read = colour.read(outfit, self.settings.cutout_dir)
-            return scoring.breakdown(outfit, read, ctx, day, model.utility(taste.vector(outfit, read)) if model.n else 0.0)
+            return scoring.breakdown(outfit, read, ctx, day, model.utility(taste.vector(outfit, read)) if model.n else 0.0, fabrics)
         return score
 
     def _rank(self, plan: OutfitPlan, scorer) -> OutfitPlan:
@@ -497,6 +508,10 @@ class Planning:
         cands = self._candidates(items, cold)
         if occasion:  # planning for one event: a stretch still has to suit it
             cands = [c for c in cands if scorer(c[0])["occasion"] >= 0]
+        # A stretch is a new idea, not a fabric they won't wear: only outfits with the fewest avoided pieces
+        # (none, unless the only coat for a cold day is one).
+        bad = [len(materials.avoided(o, self.fabrics())) for o, _ in cands]
+        cands = [c for c, n in zip(cands, bad) if n == min(bad)]
         base = float(np.mean([model.utility(x) for _, x in cands])) if cands else 0.0
 
         # The comfort zone: outfits actually worn, plus today's own picks A and B.

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, type Preference, type Profile, type TryOnMode, type TryOnProfile } from "../api";
+import { api, type MaterialFamily, type Materials, type Preference, type Profile, type TryOnMode, type TryOnProfile } from "../api";
 import type { AppCtx } from "../App";
 import Oni, { MOOD_LABEL } from "../Oni";
 import { getTheme, setTheme, type Theme } from "../theme";
@@ -91,7 +91,12 @@ export default function Notes({ ctx }: { ctx: AppCtx }) {
       </div>
 
       <div role="tabpanel" aria-label={TABS.find((t) => t.id === tab)!.en} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-        {tab === "style" && <StyleDnaCard ctx={ctx} version={learned} onPlay={setQuiz} />}
+        {tab === "style" && (
+          <>
+            <StyleDnaCard ctx={ctx} version={learned} onPlay={setQuiz} />
+            {setup && <FabricsCard ctx={ctx} profile={setup} onSaved={setSetup} />}
+          </>
+        )}
 
         {tab === "closet" && (
           <>
@@ -216,6 +221,59 @@ function TeachCard({ onPlay }: { onPlay: (kind: "styles" | "outfits") => void })
           </button>
         ))}
       </div>
+    </section>
+  );
+}
+
+const FABRICS: [MaterialFamily, string][] = [
+  ["cotton", "Cotton"], ["denim", "Denim"], ["linen", "Linen"], ["wool", "Wool"],
+  ["silk", "Silk & satin"], ["leather", "Leather & suede"], ["fleece", "Fleece"], ["synthetic", "Synthetics"],
+];
+
+// Fabrics you love or won't wear. One tap loves it, a second avoids it, a third clears it.
+function FabricsCard({ ctx, profile, onSaved }: { ctx: AppCtx; profile: Profile; onSaved: (p: Profile) => void }) {
+  const [m, setM] = useState<Materials>(profile.materials ?? { love: [], avoid: [] });
+  const state = (f: MaterialFamily) => (m.avoid.includes(f) ? "avoid" : m.love.includes(f) ? "love" : "none");
+  const cycle = (f: MaterialFamily) => {
+    const next = { none: "love", love: "avoid", avoid: "none" }[state(f)];
+    const love = m.love.filter((x) => x !== f).concat(next === "love" ? [f] : []);
+    const avoid = m.avoid.filter((x) => x !== f).concat(next === "avoid" ? [f] : []);
+    const prev = m;
+    setM({ love, avoid });
+    api.updateProfile({ materials: { love, avoid } }).then(onSaved).catch((e) => {
+      setM(prev);
+      ctx.toast((e as Error).message);
+    });
+  };
+  const owned = profile.materials_owned ?? {};
+  return (
+    <section aria-label="Fabrics" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      <span className="label">FABRICS · <span lang="ja">素材</span></span>
+      <span className="small muted">Tap once for one you love, twice for one you won't wear (itchy, sweaty, not for you).</span>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, paddingRight: 3 }}>
+        {FABRICS.map(([f, name]) => {
+          const s = state(f);
+          return (
+            <button
+              key={f}
+              type="button"
+              className={`chip press${s === "avoid" ? " shu" : ""}`}
+              aria-pressed={s === "love"}
+              aria-label={`${name}: ${s === "love" ? "love" : s === "avoid" ? "won't wear" : "no preference"}`}
+              onClick={() => cycle(f)}
+              style={{ height: 34, fontSize: 13, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6, padding: "0 12px" }}
+            >
+              <span style={{ textDecoration: s === "avoid" ? "line-through" : undefined }}>
+                {s === "love" ? "♥ " : s === "avoid" ? "✕ " : ""}{name}
+              </span>
+              <span style={{ fontSize: 11, opacity: 0.7 }}>{owned[f] ? owned[f] : ""}</span>
+            </button>
+          );
+        })}
+      </div>
+      {(m.love.length > 0 || m.avoid.length > 0) && (
+        <span className="small muted">New picks use this. To see it today, tap ↻ New picks on Today.</span>
+      )}
     </section>
   );
 }

@@ -33,6 +33,8 @@ const savedFor = (day: string) => {
 
 type Open = { event: CalendarEvent; day: string; planId: string | null } | { typing: true };
 
+const SHOWN = 2; // the next two; the rest behind "All N" so Today stays short
+
 export function ComingUp({ ctx }: { ctx: AppCtx }) {
   const [data, setData] = useState<{ calendar: string; events: UpcomingEvent[] } | null>(null);
   const [open, setOpen] = useState<Open | null>(null);
@@ -44,7 +46,7 @@ export function ComingUp({ ctx }: { ctx: AppCtx }) {
   useEffect(load, [ctx.wardrobeVersion, ctx.refreshKey]);
 
   const events = data?.events ?? [];
-  const shown = all ? events : events.slice(0, 4);
+  const shown = all ? events : events.slice(0, SHOWN);
   return (
     <section id="occasions" aria-label="Dress for an occasion" className="card" style={{ padding: 12, display: "flex", flexDirection: "column", gap: 10, marginTop: 6 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
@@ -94,7 +96,7 @@ export function ComingUp({ ctx }: { ctx: AppCtx }) {
         <button type="button" className="chip press" onClick={() => setOpen({ typing: true })}>
           + Something else coming up
         </button>
-        {events.length > 4 && (
+        {events.length > SHOWN && (
           <button type="button" className="chip press" onClick={() => setAll(!all)}>
             {all ? "Fewer" : `All ${events.length}`}
           </button>

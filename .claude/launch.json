@@ -8,6 +8,12 @@
       "port": 8000
     },
     {
+      "name": "api-scratch",
+      "runtimeExecutable": ".venv/Scripts/python.exe",
+      "runtimeArgs": ["-m", "server.dev", "--var", "var/scratch"],
+      "port": 8000
+    },
+    {
       "name": "api-live",
       "runtimeExecutable": ".venv/Scripts/python.exe",
       "runtimeArgs": ["-m", "server.dev", "--live"],

@@ -1,7 +1,7 @@
 """One score for an outfit, shared by every way a plan is made.
 
 The rule picker chooses from every outfit the closet can make by this score; in live mode Muse
-Spark Open proposes five candidates and this score picks looks A and B from them. Five parts,
+Spark Open proposes five candidates and this score picks looks A and B from them. Six parts,
 each on a similar scale so none can drown the others (the old rule picker gave half a point
 per idle day, uncapped, so a 400-day coat beat the weather):
 
@@ -14,12 +14,15 @@ per idle day, uncapped, so a 400-day coat beat the weather):
 - colour:   docs/STYLE_GUIDE.md section 1 on the measured colour read: neutrals with one pop score best,
             two clashing colours worst; head-to-toe dark and two patterns at once cost a little
 - taste:    the learned taste's utility for this outfit (closet/taste.py), 0 until it has learned anything
+- material: fabrics the person loves (a little up) or won't wear (well down), closet/materials.py
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime
+
+from . import materials
 
 RESCUE_MAX = 3.0
 RESCUE_CAP_DAYS = 90
@@ -72,8 +75,10 @@ def idle_days(item: dict, today: date) -> int:
     return NEVER_WORN_DAYS if not worn else (today - datetime.fromisoformat(worn).date()).days
 
 
-def breakdown(outfit: list[dict], read: dict, day: Day, today: date, taste_utility: float = 0.0) -> dict:
-    """The score of one outfit, part by part. `read` is its colour read (closet/colour.read)."""
+def breakdown(outfit: list[dict], read: dict, day: Day, today: date, taste_utility: float = 0.0,
+              fabrics: dict | None = None) -> dict:
+    """The score of one outfit, part by part. `read` is its colour read (closet/colour.read); `fabrics` is
+    the person's {"love": [...], "avoid": [...]} material families."""
     tags = [i["tags"] for i in outfit]
     core = [i for i in outfit if i["tags"]["category"] in ("top", "bottom", "dress")]
     layers = [t for t in tags if t["category"] == "outerwear"]
@@ -114,7 +119,7 @@ def breakdown(outfit: list[dict], read: dict, day: Day, today: date, taste_utili
         colour -= 0.6
 
     parts = {"rescue": rescue, "weather": weather, "occasion": occasion, "colour": colour,
-             "taste": TASTE_WEIGHT * taste_utility}
+             "taste": TASTE_WEIGHT * taste_utility, "material": materials.score(outfit, fabrics)}
     return {**{k: round(v, 2) for k, v in parts.items()}, "total": round(sum(parts.values()), 2)}
 
 

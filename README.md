@@ -294,6 +294,9 @@ One score, used by every way a plan is made. In live mode Muse Spark Open propos
 | Occasion | Something smart on a day with a dress code, nothing sporty to it, and not overdressed otherwise. |
 | Colour | The style guide on the measured colour read: neutrals with one pop of colour score best, two clashing colours worst, and head-to-toe dark or two patterns cost a little. |
 | Taste | The learned taste's utility for the outfit, 0 until it has learned anything. |
+| Material | Fabrics set in Notes → Your style → Fabrics (`closet/materials.py`). +0.35 for each piece in a fabric you love, up to three pieces. −1.5 for each piece in a fabric you won't wear, so it only turns up when nothing else works, like the only coat on a cold day. |
+
+The tagger's free-text material ("cotton-blend fleece", "likely polyester-viscose blend") is sorted into eight families: cotton, denim, linen, wool, silk & satin, leather & suede, fleece and synthetics. Faux leather counts as a synthetic. The same preferences reach the planner and the thrift agent as preference lines, and the Stretch is only picked from outfits with the fewest avoided pieces.
 
 - **Look A** is the best look that rescues something. **Look B** is the best look sharing no piece with A. **Look C** is the Stretch.
 - The trace shows the breakdown for each look, for example "A 1.3 = weather −0.5 · occasion −0.6 · colour +0.2 · taste +2.1".
