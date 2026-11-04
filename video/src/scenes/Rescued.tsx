@@ -82,16 +82,6 @@ const RescuedInner = () => {
     <>
       <Backdrop name="Backdrop" kanji="救出" />
       <Camera hits={[BITE + 0.05, FULL + 0.05]}>
-        <SceneText
-          name="Rescued caption"
-          kicker="05 · WEAR IT · 救出成功"
-          title="WEAR IT, AND IT EATS."
-          body=""
-          accent="#c4472f"
-          delay={0}
-          style={{ position: "absolute", left: 120, top: 80, width: 1150 }}
-        />
-
         <Interactive.Div
           name="Oni"
           style={{
@@ -311,12 +301,25 @@ const RescuedInner = () => {
               },
             )}
             focus={[215, 731]}
-            travel={[-260, -225]}
+            // Only a short way left: the pushed phone has to clear the headline and the meter.
+            travel={[-80, -225]}
             spotlight
           >
             <Tap x={215} y={731} at={TAP} />
           </Phone>
         </Interactive.Div>
+
+        {/* After the phone, so its spotlight dims the oni and the meter but not the headline
+            that is still being read while the phone is close. */}
+        <SceneText
+          name="Rescued caption"
+          kicker="05 · WEAR IT · 救出成功"
+          title="WEAR IT, AND IT EATS."
+          body=""
+          accent="#c4472f"
+          delay={0}
+          style={{ position: "absolute", left: 120, top: 80, width: 1150 }}
+        />
 
         {/* The jeans arc from the phone into the oni's mouth, drawn over the phone. */}
         <Img
