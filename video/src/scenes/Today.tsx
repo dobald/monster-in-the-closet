@@ -35,6 +35,14 @@ const REASONS = [
     at: 3.8,
     rot: -2,
   },
+  // Not a reason but the result: the whole look came out of the closet.
+  {
+    label: "NEW CLOTHES BOUGHT → 0",
+    color: "#e9b43c",
+    ink: "#2b2724",
+    at: 4.5,
+    rot: 2,
+  },
 ];
 
 const TodayInner = () => {
@@ -66,7 +74,7 @@ const TodayInner = () => {
           style={{
             position: "absolute",
             left: 120,
-            top: 640,
+            top: 600,
             display: "flex",
             flexDirection: "column",
             alignItems: "flex-start",

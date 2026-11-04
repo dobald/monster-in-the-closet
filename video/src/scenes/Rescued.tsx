@@ -252,6 +252,7 @@ const RescuedInner = () => {
               background: "#c4472f",
               color: "#ffffff",
               padding: "10px 18px",
+              lineHeight: 1.3,
               borderRadius: 8,
               rotate: "-2deg",
               scale: String(
@@ -269,6 +270,9 @@ const RescuedInner = () => {
             }}
           >
             JEANS BACK AFTER 400 DAYS
+            {/* A callback to the Stakes scene's "BINNED SOONER". */}
+            <br />
+            SAVED FROM THE BIN
           </div>
         </Interactive.Div>
 
