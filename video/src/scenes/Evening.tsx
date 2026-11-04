@@ -127,6 +127,35 @@ const EveningInner = () => {
           >
             SHOP LAST.
           </div>
+          {/* What the Thrift tab promises: second-hand only, never a fast-fashion brand. */}
+          <div
+            style={{
+              display: "inline-block",
+              marginTop: 24,
+              fontFamily: mono,
+              fontSize: 28,
+              lineHeight: 1.3,
+              letterSpacing: "0.08em",
+              background: "#e9b43c",
+              color: "#2b2724",
+              border: "3px solid #ede6da",
+              padding: "8px 16px",
+              borderRadius: 8,
+              rotate: "2deg",
+              transformOrigin: "0% 50%",
+              scale: String(
+                interpolate(frame, [5.6 * fps, 5.9 * fps], [0, 1], {
+                  extrapolateLeft: "clamp",
+                  extrapolateRight: "clamp",
+                  easing: Easing.bezier(0.34, 1.56, 0.64, 1),
+                }),
+              ),
+            }}
+          >
+            SECOND-HAND ONLY
+            <br />
+            NO FAST FASHION
+          </div>
         </Interactive.Div>
         <Interactive.Div
           name="Outfits sticker"
@@ -134,7 +163,7 @@ const EveningInner = () => {
             position: "absolute",
             // Slapped over the thrift phone's edge, so it stays inside the side margin.
             left: 1290,
-            top: 600,
+            top: 660,
             fontFamily: display,
             fontSize: 64,
             lineHeight: 1,

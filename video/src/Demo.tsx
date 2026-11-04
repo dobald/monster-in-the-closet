@@ -19,6 +19,7 @@ import { Rescued } from "./scenes/Rescued";
 import { Scan } from "./scenes/Scan";
 import { Scores } from "./scenes/Scores";
 import { Shape } from "./scenes/Shape";
+import { Stakes } from "./scenes/Stakes";
 import { Today } from "./scenes/Today";
 
 // The hackathon demo, cut to "Local Forecast" (Kevin MacLeod, 92.99 bpm, first beat at 0.313 s,
@@ -35,6 +36,13 @@ export const Demo = () => {
         <TransitionSeries.Transition
           presentation={wipe({ direction: "from-left" })}
           timing={linearTiming({ durationInFrames: 15 })}
+        />
+        <TransitionSeries.Sequence name="Stakes" durationInFrames={154}>
+          <Stakes style={{ backgroundColor: "#1e1b19", color: "#ede6da" }} />
+        </TransitionSeries.Sequence>
+        <TransitionSeries.Transition
+          presentation={iris({ x: 27, y: 52, color: "#c4472f" })}
+          timing={linearTiming({ durationInFrames: 18 })}
         />
         <TransitionSeries.Sequence name="Quote" durationInFrames={179}>
           <Quote style={{ backgroundColor: "#1e1b19", color: "#ede6da" }} />
@@ -64,21 +72,21 @@ export const Demo = () => {
           presentation={iris({ x: 22, y: 55, color: "#34506b" })}
           timing={linearTiming({ durationInFrames: 18 })}
         />
-        <TransitionSeries.Sequence name="Dedupe" durationInFrames={276}>
+        <TransitionSeries.Sequence name="Dedupe" durationInFrames={275}>
           <Dedupe style={{ backgroundColor: "#1e1b19", color: "#ede6da" }} />
         </TransitionSeries.Sequence>
         <TransitionSeries.Transition
           presentation={noren()}
           timing={linearTiming({ durationInFrames: 24 })}
         />
-        <TransitionSeries.Sequence name="Learn" durationInFrames={189}>
+        <TransitionSeries.Sequence name="Learn" durationInFrames={190}>
           <Learn style={{ backgroundColor: "#1e1b19", color: "#ede6da" }} />
         </TransitionSeries.Sequence>
         <TransitionSeries.Transition
           presentation={slide({ direction: "from-right" })}
           timing={linearTiming({ durationInFrames: 15 })}
         />
-        <TransitionSeries.Sequence name="Today" durationInFrames={309}>
+        <TransitionSeries.Sequence name="Today" durationInFrames={308}>
           <Today style={{ backgroundColor: "#1e1b19", color: "#ede6da" }} />
         </TransitionSeries.Sequence>
         <TransitionSeries.Transition
@@ -92,7 +100,7 @@ export const Demo = () => {
           presentation={iris({ x: 36, y: 78, color: "#c4472f" })}
           timing={linearTiming({ durationInFrames: 18 })}
         />
-        <TransitionSeries.Sequence name="Scores" durationInFrames={250}>
+        <TransitionSeries.Sequence name="Scores" durationInFrames={251}>
           <Scores style={{ backgroundColor: "#1e1b19", color: "#ede6da" }} />
         </TransitionSeries.Sequence>
         <TransitionSeries.Transition
@@ -106,7 +114,7 @@ export const Demo = () => {
           presentation={slide({ direction: "from-bottom" })}
           timing={linearTiming({ durationInFrames: 15 })}
         />
-        <TransitionSeries.Sequence name="Evening" durationInFrames={212}>
+        <TransitionSeries.Sequence name="Evening" durationInFrames={231}>
           <Evening style={{ backgroundColor: "#1e1b19", color: "#ede6da" }} />
         </TransitionSeries.Sequence>
         <TransitionSeries.Transition
@@ -135,9 +143,9 @@ export const Demo = () => {
       <Audio
         name="Music: Local Forecast"
         src={staticFile("audio/local-forecast.mp3")}
-        durationInFrames={3184}
+        durationInFrames={3339}
         volume={(f) =>
-          interpolate(f, [0, 6, 3094, 3184], [0, 0.8, 0.8, 0], {
+          interpolate(f, [0, 6, 3249, 3339], [0, 0.8, 0.8, 0], {
             extrapolateLeft: "clamp",
             extrapolateRight: "clamp",
           })
