@@ -94,6 +94,7 @@ const OutroInner = () => {
             fontFamily: body,
             fontWeight: 700,
             fontSize: 48,
+            lineHeight: 1.25,
             color: "#e8a08f",
             opacity: interpolate(frame, [1.8 * fps, 2.2 * fps], [0, 1], {
               extrapolateLeft: "clamp",
@@ -101,14 +102,16 @@ const OutroInner = () => {
             }),
           }}
         >
-          Wear what you already own. Keep the monster fed.
+          Wear what you own. Thrift the rest.
+          <br />
+          Skip fast fashion. Keep the monster fed.
         </Interactive.Div>
         <Interactive.Div
           name="Outro credit"
           style={{
             position: "absolute",
             left: 780,
-            top: 760,
+            top: 800,
             fontFamily: mono,
             fontSize: 28,
             letterSpacing: "0.1em",
@@ -127,7 +130,7 @@ const OutroInner = () => {
           style={{
             position: "absolute",
             left: 780,
-            top: 840,
+            top: 870,
             width: 1020,
             fontFamily: body,
             fontSize: 28,

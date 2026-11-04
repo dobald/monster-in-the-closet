@@ -1,19 +1,19 @@
 # Demo video
 
-A 1:46 Remotion video for the hackathon submission: 1920×1080, 30 fps, scored to "Local Forecast" by Kevin MacLeod. Its motion rules (palette, one easing per job, stagger frames, transitions, the oni's acting, the avoid list) are in [STYLE.md](STYLE.md); check new scenes against it.
+A 1:51 Remotion video for the hackathon submission: 1920×1080, 30 fps, scored to "Local Forecast" by Kevin MacLeod. Its motion rules (palette, one easing per job, stagger frames, transitions, the oni's acting, the avoid list) are in [STYLE.md](STYLE.md); check new scenes against it.
 
 On-screen text is kept to headlines, short labels and numbers, so a voiceover can carry the detail.
 
 The video itself uses the app's dark theme (ground `#1e1b19`, ink `#ede6da`, cards `#2c2825`, light hard shadows, a calm riso-print backdrop), while the app captures stay in the light theme for contrast. Garments shown outside a phone sit on a light photo slot or get a thin light outline, so black and navy pieces don't disappear.
 
-Five "Under the hood" scenes (Findings, Shape, Dedupe, Scores, Renders) are drawn from real data, not mock-ups: the README's measured results, the app's own score() trace, and the sample tee's convex hull measured the way `closet/scan.py` does it (`src/data/tee-hull.json`).
+The Stakes scene's two figures are from the Ellen MacArthur Foundation's *A New Textiles Economy* (2017), credited on screen: clothing utilisation fell 36% in 15 years, and the equivalent of one garbage truck of textiles is landfilled or burned every second. Five "Under the hood" scenes (Findings, Shape, Dedupe, Scores, Renders) are drawn from real data, not mock-ups: the README's measured results, the app's own score() trace, and the sample tee's convex hull measured the way `closet/scan.py` does it (`src/data/tee-hull.json`).
 
 ```bash
 npm i
 npm run dev        # Remotion Studio (or the "video" launch config, on :3000)
 ```
 
-- `src/Demo.tsx` is the full timeline: fifteen scenes joined by eight 18-frame irises (`IrisTransition`), two 24-frame noren curtains and four 15-frame wipes or slides. If you change a scene's or a transition's length, change `durationInFrames` of the `Demo` composition in `src/Root.tsx` to match.
+- `src/Demo.tsx` is the full timeline: sixteen scenes joined by nine 18-frame irises (`IrisTransition`), two 24-frame noren curtains and four 15-frame wipes or slides. If you change a scene's or a transition's length, change `durationInFrames` of the `Demo` composition in `src/Root.tsx` to match.
 - Each scene in `src/scenes/` is also registered on its own under **Scenes**, so you can open and edit it on its own timeline.
 - `src/Oni.tsx` is the app's oni (`web/src/Oni.tsx`) with its CSS motion swapped for frame-driven motion, plus blinks, `look` (where its eyes point), squash and stretch, `wave` and `chomp`.
 - Shared motion pieces in `src/components/`:
