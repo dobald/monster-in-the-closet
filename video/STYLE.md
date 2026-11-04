@@ -35,7 +35,7 @@ No other curves. Overshoot is only for pop.
 
 - Headline words rise out of their own mask, **3 frames apart, 21 frames each**. Never fade text in.
 - Something lands in the first second of the video (the oni drops at 0.15 s, lands at 0.55 s).
-- Beats follow each other closely: a scene ends about 1.5–2 s after its last beat lands. Leave longer holds only where a voiceover needs them.
+- Beats follow each other closely: a scene hands off about 1 s after its last beat lands (so the cut starts then), and the first screen action follows the headline within about 1 s. Leave longer holds only where a voiceover needs them.
 - Any text on screen gets about 0.3 s per word to read, and at least 1 s.
 - A screen action (tap, swipe) every 3–4 s, with about 8 frames between the tap and what it causes.
 - For the detail that matters, the **whole phone comes toward the camera**: it grows to 1.5× around that detail, travels it toward the middle of the frame, turns about 5° to face you and lifts on a deeper shadow, then settles back once the action is done (0.8 s in, 0.7 s out, enter curve). Where nothing else needs reading, the rest of the scene dims to 50 % while it is close.

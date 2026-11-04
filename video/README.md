@@ -1,6 +1,6 @@
 # Demo video
 
-A 1:53 Remotion video for the hackathon submission: 1920×1080, 30 fps, scored to "Local Forecast" by Kevin MacLeod. Its motion rules (palette, one easing per job, stagger frames, transitions, the oni's acting, the avoid list) are in [STYLE.md](STYLE.md); check new scenes against it.
+A 1:46 Remotion video for the hackathon submission: 1920×1080, 30 fps, scored to "Local Forecast" by Kevin MacLeod. Its motion rules (palette, one easing per job, stagger frames, transitions, the oni's acting, the avoid list) are in [STYLE.md](STYLE.md); check new scenes against it.
 
 On-screen text is kept to headlines, short labels and numbers, so a voiceover can carry the detail.
 
