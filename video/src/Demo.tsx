@@ -43,49 +43,49 @@ export const Demo = () => {
           presentation={noren()}
           timing={linearTiming({ durationInFrames: 24 })}
         />
-        <TransitionSeries.Sequence name="Scan" durationInFrames={366}>
+        <TransitionSeries.Sequence name="Scan" durationInFrames={308}>
           <Scan style={{ backgroundColor: "#1e1b19", color: "#ede6da" }} />
         </TransitionSeries.Sequence>
         <TransitionSeries.Transition
           presentation={iris({ x: 83, y: 50, color: "#c4472f" })}
           timing={linearTiming({ durationInFrames: 18 })}
         />
-        <TransitionSeries.Sequence name="Findings" durationInFrames={231}>
+        <TransitionSeries.Sequence name="Findings" durationInFrames={212}>
           <Findings style={{ backgroundColor: "#1e1b19", color: "#ede6da" }} />
         </TransitionSeries.Sequence>
         <TransitionSeries.Transition
           presentation={iris({ x: 92, y: 41, color: "#c4472f" })}
           timing={linearTiming({ durationInFrames: 18 })}
         />
-        <TransitionSeries.Sequence name="Shape" durationInFrames={251}>
+        <TransitionSeries.Sequence name="Shape" durationInFrames={250}>
           <Shape style={{ backgroundColor: "#1e1b19", color: "#ede6da" }} />
         </TransitionSeries.Sequence>
         <TransitionSeries.Transition
           presentation={iris({ x: 22, y: 55, color: "#34506b" })}
           timing={linearTiming({ durationInFrames: 18 })}
         />
-        <TransitionSeries.Sequence name="Dedupe" durationInFrames={275}>
+        <TransitionSeries.Sequence name="Dedupe" durationInFrames={276}>
           <Dedupe style={{ backgroundColor: "#1e1b19", color: "#ede6da" }} />
         </TransitionSeries.Sequence>
         <TransitionSeries.Transition
           presentation={noren()}
           timing={linearTiming({ durationInFrames: 24 })}
         />
-        <TransitionSeries.Sequence name="Learn" durationInFrames={209}>
+        <TransitionSeries.Sequence name="Learn" durationInFrames={189}>
           <Learn style={{ backgroundColor: "#1e1b19", color: "#ede6da" }} />
         </TransitionSeries.Sequence>
         <TransitionSeries.Transition
           presentation={slide({ direction: "from-right" })}
           timing={linearTiming({ durationInFrames: 15 })}
         />
-        <TransitionSeries.Sequence name="Today" durationInFrames={308}>
+        <TransitionSeries.Sequence name="Today" durationInFrames={309}>
           <Today style={{ backgroundColor: "#1e1b19", color: "#ede6da" }} />
         </TransitionSeries.Sequence>
         <TransitionSeries.Transition
           presentation={iris({ x: 83, y: 50, color: "#34506b" })}
           timing={linearTiming({ durationInFrames: 18 })}
         />
-        <TransitionSeries.Sequence name="Agent" durationInFrames={231}>
+        <TransitionSeries.Sequence name="Agent" durationInFrames={192}>
           <Agent style={{ backgroundColor: "#1e1b19", color: "#ede6da" }} />
         </TransitionSeries.Sequence>
         <TransitionSeries.Transition
@@ -99,28 +99,28 @@ export const Demo = () => {
           presentation={iris({ x: 93, y: 32, color: "#c4472f" })}
           timing={linearTiming({ durationInFrames: 18 })}
         />
-        <TransitionSeries.Sequence name="Rescued" durationInFrames={248}>
+        <TransitionSeries.Sequence name="Rescued" durationInFrames={247}>
           <Rescued style={{ backgroundColor: "#1e1b19", color: "#ede6da" }} />
         </TransitionSeries.Sequence>
         <TransitionSeries.Transition
           presentation={slide({ direction: "from-bottom" })}
           timing={linearTiming({ durationInFrames: 15 })}
         />
-        <TransitionSeries.Sequence name="Evening" durationInFrames={231}>
+        <TransitionSeries.Sequence name="Evening" durationInFrames={212}>
           <Evening style={{ backgroundColor: "#1e1b19", color: "#ede6da" }} />
         </TransitionSeries.Sequence>
         <TransitionSeries.Transition
           presentation={iris({ x: 86, y: 57, color: "#c4472f" })}
           timing={linearTiming({ durationInFrames: 18 })}
         />
-        <TransitionSeries.Sequence name="Renders" durationInFrames={250}>
+        <TransitionSeries.Sequence name="Renders" durationInFrames={211}>
           <Renders style={{ backgroundColor: "#1e1b19", color: "#ede6da" }} />
         </TransitionSeries.Sequence>
         <TransitionSeries.Transition
           presentation={iris({ x: 83, y: 81, color: "#34506b" })}
           timing={linearTiming({ durationInFrames: 18 })}
         />
-        <TransitionSeries.Sequence name="Models" durationInFrames={247}>
+        <TransitionSeries.Sequence name="Models" durationInFrames={248}>
           <Models style={{ backgroundColor: "#1e1b19", color: "#ede6da" }} />
         </TransitionSeries.Sequence>
         <TransitionSeries.Transition
@@ -135,9 +135,9 @@ export const Demo = () => {
       <Audio
         name="Music: Local Forecast"
         src={staticFile("audio/local-forecast.mp3")}
-        durationInFrames={3377}
+        durationInFrames={3184}
         volume={(f) =>
-          interpolate(f, [0, 6, 3287, 3377], [0, 0.8, 0.8, 0], {
+          interpolate(f, [0, 6, 3094, 3184], [0, 0.8, 0.8, 0], {
             extrapolateLeft: "clamp",
             extrapolateRight: "clamp",
           })

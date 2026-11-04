@@ -18,8 +18,8 @@ import { display, mono } from "../theme";
 // The beats, in seconds: tap "Wear this", the jeans fly to the oni, it bites, swells, celebrates.
 const TAP = 1.6;
 const FLY = 2.13;
-const BITE = 3.23; // on beat 123 of the music
-const FULL = 4.53; // on beat 125
+const BITE = 3.23; // on beat 116 of the music
+const FULL = 4.53; // on beat 118
 
 // Where things sit on screen.
 const ONI = { left: 170, top: 440, size: 420 };

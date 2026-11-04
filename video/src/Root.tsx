@@ -19,14 +19,14 @@ import { Scores } from "./scenes/Scores";
 import { Shape } from "./scenes/Shape";
 import { Today } from "./scenes/Today";
 
-// Demo length: 3377 frames (1:52.6), cut to the beat of "Local Forecast": see Demo.tsx.
+// Demo length: 3184 frames (1:46.1), cut to the beat of "Local Forecast": see Demo.tsx.
 export const RemotionRoot: React.FC = () => {
   return (
     <>
       <Composition
         id="Demo"
         component={Demo}
-        durationInFrames={3377}
+        durationInFrames={3184}
         fps={30}
         width={1920}
         height={1080}
@@ -57,7 +57,7 @@ export const RemotionRoot: React.FC = () => {
         <Composition
           id="Scan"
           component={Scan}
-          durationInFrames={366}
+          durationInFrames={308}
           fps={30}
           width={1920}
           height={1080}
@@ -68,7 +68,7 @@ export const RemotionRoot: React.FC = () => {
         <Composition
           id="Findings"
           component={Findings}
-          durationInFrames={231}
+          durationInFrames={212}
           fps={30}
           width={1920}
           height={1080}
@@ -79,7 +79,7 @@ export const RemotionRoot: React.FC = () => {
         <Composition
           id="Shape"
           component={Shape}
-          durationInFrames={251}
+          durationInFrames={250}
           fps={30}
           width={1920}
           height={1080}
@@ -90,7 +90,7 @@ export const RemotionRoot: React.FC = () => {
         <Composition
           id="Dedupe"
           component={Dedupe}
-          durationInFrames={275}
+          durationInFrames={276}
           fps={30}
           width={1920}
           height={1080}
@@ -101,7 +101,7 @@ export const RemotionRoot: React.FC = () => {
         <Composition
           id="Learn"
           component={Learn}
-          durationInFrames={209}
+          durationInFrames={189}
           fps={30}
           width={1920}
           height={1080}
@@ -112,7 +112,7 @@ export const RemotionRoot: React.FC = () => {
         <Composition
           id="Today"
           component={Today}
-          durationInFrames={308}
+          durationInFrames={309}
           fps={30}
           width={1920}
           height={1080}
@@ -123,7 +123,7 @@ export const RemotionRoot: React.FC = () => {
         <Composition
           id="Agent"
           component={Agent}
-          durationInFrames={231}
+          durationInFrames={192}
           fps={30}
           width={1920}
           height={1080}
@@ -145,7 +145,7 @@ export const RemotionRoot: React.FC = () => {
         <Composition
           id="Rescued"
           component={Rescued}
-          durationInFrames={248}
+          durationInFrames={247}
           fps={30}
           width={1920}
           height={1080}
@@ -156,7 +156,7 @@ export const RemotionRoot: React.FC = () => {
         <Composition
           id="Evening"
           component={Evening}
-          durationInFrames={231}
+          durationInFrames={212}
           fps={30}
           width={1920}
           height={1080}
@@ -167,7 +167,7 @@ export const RemotionRoot: React.FC = () => {
         <Composition
           id="Renders"
           component={Renders}
-          durationInFrames={250}
+          durationInFrames={211}
           fps={30}
           width={1920}
           height={1080}
@@ -178,7 +178,7 @@ export const RemotionRoot: React.FC = () => {
         <Composition
           id="Models"
           component={Models}
-          durationInFrames={247}
+          durationInFrames={248}
           fps={30}
           width={1920}
           height={1080}

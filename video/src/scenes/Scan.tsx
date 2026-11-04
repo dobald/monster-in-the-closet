@@ -37,7 +37,7 @@ const ScanInner = () => {
   return (
     <>
       <Backdrop name="Backdrop" kanji="服" />
-      <Camera hits={[7.35, 8.1]}>
+      <Camera hits={[5.35, 6.1]}>
         <SceneText
           name="Scan caption"
           kicker="01 · FEED ME · 服をちょうだい"
@@ -53,7 +53,7 @@ const ScanInner = () => {
           style={{ position: "absolute", inset: 0 }}
         >
           {PIECES.map((p, i) => {
-            const s = (6.9 + i * 0.15) * fps;
+            const s = (4.9 + i * 0.15) * fps;
             const k = interpolate(frame, [s, s + 0.6 * fps], [0, 1], {
               extrapolateLeft: "clamp",
               extrapolateRight: "clamp",
@@ -100,11 +100,11 @@ const ScanInner = () => {
             padding: "12px 22px",
             borderRadius: 8,
             rotate: "-3deg",
-            opacity: interpolate(frame, [7.3 * fps, 7.45 * fps], [0, 1], {
+            opacity: interpolate(frame, [5.3 * fps, 5.45 * fps], [0, 1], {
               extrapolateLeft: "clamp",
               extrapolateRight: "clamp",
             }),
-            scale: interpolate(frame, [7.3 * fps, 7.7 * fps], [1.8, 1], {
+            scale: interpolate(frame, [5.3 * fps, 5.7 * fps], [1.8, 1], {
               extrapolateLeft: "clamp",
               extrapolateRight: "clamp",
               easing: Easing.bezier(0.34, 1.56, 0.64, 1),
@@ -129,7 +129,7 @@ const ScanInner = () => {
             boxShadow: "8px 8px 0 #34506b",
             rotate: interpolate(
               frame,
-              [7.9 * fps, 8.4 * fps],
+              [5.9 * fps, 6.4 * fps],
               ["14deg", "-3deg"],
               {
                 extrapolateLeft: "clamp",
@@ -137,13 +137,13 @@ const ScanInner = () => {
                 easing: Easing.bezier(0.16, 1, 0.3, 1),
               },
             ),
-            opacity: interpolate(frame, [7.9 * fps, 8.1 * fps], [0, 1], {
+            opacity: interpolate(frame, [5.9 * fps, 6.1 * fps], [0, 1], {
               extrapolateLeft: "clamp",
               extrapolateRight: "clamp",
             }),
             translate: interpolate(
               frame,
-              [7.9 * fps, 8.4 * fps],
+              [5.9 * fps, 6.4 * fps],
               ["0px -260px", "0px 0px"],
               {
                 extrapolateLeft: "clamp",
@@ -200,13 +200,13 @@ const ScanInner = () => {
                 fontSize: 28,
                 opacity: interpolate(
                   frame,
-                  [(8.5 + i * 0.18) * fps, (8.7 + i * 0.18) * fps],
+                  [(6.5 + i * 0.18) * fps, (6.7 + i * 0.18) * fps],
                   [0, 1],
                   { extrapolateLeft: "clamp", extrapolateRight: "clamp" },
                 ),
                 translate: `${interpolate(
                   frame,
-                  [(8.5 + i * 0.18) * fps, (8.8 + i * 0.18) * fps],
+                  [(6.5 + i * 0.18) * fps, (6.8 + i * 0.18) * fps],
                   [30, 0],
                   {
                     extrapolateLeft: "clamp",
@@ -255,17 +255,17 @@ const ScanInner = () => {
         >
           <Phone
             screens={["05-closet-sample", "20-closet-full"]}
-            index={interpolate(frame, [6.4 * fps, 6.9 * fps], [0, 1], {
+            index={interpolate(frame, [4.4 * fps, 4.9 * fps], [0, 1], {
               extrapolateLeft: "clamp",
               extrapolateRight: "clamp",
               easing: Easing.bezier(0.7, 0, 0.2, 1),
             })}
-            tabbar={frame > 6.6 * fps}
+            tabbar={frame > 4.6 * fps}
             enter={0}
             scale={0.96}
             zoom={interpolate(
               frame,
-              [4.3 * fps, 5.1 * fps, 5.8 * fps, 6.5 * fps],
+              [2.3 * fps, 3.1 * fps, 3.8 * fps, 4.5 * fps],
               [1, 1.5, 1.5, 1],
               {
                 extrapolateLeft: "clamp",
@@ -276,13 +276,13 @@ const ScanInner = () => {
             focus={[315, 824]}
             travel={[-306, -274]}
             spotlight
-            scroll={interpolate(frame, [9.4 * fps, 12 * fps], [0, 454], {
+            scroll={interpolate(frame, [7.4 * fps, 10 * fps], [0, 454], {
               extrapolateLeft: "clamp",
               extrapolateRight: "clamp",
               easing: Easing.inOut(Easing.cubic),
             })}
           >
-            <Tap x={315} y={824} at={5.6} />
+            <Tap x={315} y={824} at={3.6} />
           </Phone>
         </Interactive.Div>
       </Camera>
