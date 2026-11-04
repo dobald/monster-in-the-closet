@@ -9,6 +9,8 @@ __pycache__/
 # Personal media: this repo is public, so closet footage, selfies and
 # generated renders never get committed.
 data/
+# ...but the video's measured data (tee-hull.json) is derived from a public sample, not personal media.
+!video/src/data/
 out/
 var/
 *.mp4
