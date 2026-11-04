@@ -39,7 +39,7 @@ const EveningInner = () => {
           name="Check-in phone"
           style={{
             position: "absolute",
-            left: 150,
+            left: 120,
             top: 110,
             rotate: "-2deg",
             ...rise(0),
@@ -54,7 +54,7 @@ const EveningInner = () => {
           name="Check-in caption"
           style={{
             position: "absolute",
-            left: 590,
+            left: 560,
             top: 260,
             width: 420,
             color: "#f3eee5",
@@ -87,7 +87,7 @@ const EveningInner = () => {
           name="Thrift phone"
           style={{
             position: "absolute",
-            left: 1050,
+            left: 1000,
             top: 110,
             rotate: "2deg",
             ...rise(3.6),
@@ -99,9 +99,9 @@ const EveningInner = () => {
           name="Thrift caption"
           style={{
             position: "absolute",
-            left: 1490,
+            left: 1430,
             top: 260,
-            width: 330,
+            width: 350,
             color: "#f3eee5",
             ...rise(4),
           }}
@@ -112,6 +112,7 @@ const EveningInner = () => {
               fontSize: 28,
               letterSpacing: "0.12em",
               color: "#e8a08f",
+              whiteSpace: "nowrap",
             }}
           >
             07 · THRIFT · 古着
@@ -131,8 +132,9 @@ const EveningInner = () => {
           name="Outfits sticker"
           style={{
             position: "absolute",
-            left: 1490,
-            top: 560,
+            // Slapped over the thrift phone's edge, so it stays inside the side margin.
+            left: 1290,
+            top: 600,
             fontFamily: display,
             fontSize: 64,
             lineHeight: 1,
