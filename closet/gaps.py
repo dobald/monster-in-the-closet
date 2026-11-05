@@ -15,7 +15,7 @@ import time
 from collections import Counter
 from datetime import date
 
-from . import config
+from . import config, materials
 from .planner import PERSONA, preference_lines, wardrobe_lines
 from .schema import GapPiece, GapReport
 
@@ -62,14 +62,20 @@ def outfits_unlocked(category: str, pairs_with: list[str], items: list[dict]) ->
     return 0
 
 
-def clean_report(report: GapReport, items: list[dict]) -> list[dict]:
-    """Drop invented ids and pieces that pair with too little; attach the count; most outfits first."""
+def avoided(name: str, search_terms: list[str], avoid: set[str]) -> bool:
+    """A piece made of a fabric the person won't wear ("Wool overcoat" for someone who avoids wool)."""
+    return bool(avoid and materials.families(" ".join([name, *search_terms])) & avoid)
+
+
+def clean_report(report: GapReport, items: list[dict], avoid: set[str] = frozenset()) -> list[dict]:
+    """Drop invented ids, pieces that pair with too little and fabrics they won't wear; attach the count;
+    most outfits first."""
     known = {i["id"] for i in items}
     out, seen = [], set()
     for p in report.pieces:
         pairs = list(dict.fromkeys(i for i in p.pairs_with if i in known))
         name = _tidy_name(p.name, p.category)
-        if len(pairs) < 2 or name.lower() in seen:
+        if len(pairs) < 2 or name.lower() in seen or avoided(name, p.search_terms, avoid):
             continue
         seen.add(name.lower())
         n = outfits_unlocked(p.category, pairs, items)
@@ -152,7 +158,8 @@ STAPLES: dict[str, list[dict]] = {
 PLURAL = {"outerwear": "layers", "top": "tops", "bottom": "bottoms"}
 
 
-def find_gaps_with_rules(items: list[dict], dismissed: list[str], watching: list[str]) -> GapReport:
+def find_gaps_with_rules(items: list[dict], dismissed: list[str], watching: list[str],
+                         avoid: set[str] = frozenset()) -> GapReport:
     """Whichever category is thinnest gets a versatile staple that pairs with everything opposite it.
     Never one the closet already has: suggesting a second pair of dark jeans to someone who owns
     them is exactly the shopping app this isn't."""
@@ -165,7 +172,8 @@ def find_gaps_with_rules(items: list[dict], dismissed: list[str], watching: list
 
     pieces = []
     for cat in sorted(STAPLES, key=lambda c: cats[c]):
-        staple = next((s for s in STAPLES[cat] if s["name"].lower() not in skip and not owned(cat, s)), None)
+        staple = next((s for s in STAPLES[cat] if s["name"].lower() not in skip and not owned(cat, s)
+                       and not avoided(s["name"], s["search_terms"], avoid)), None)
         if not staple:
             continue
         pairs = ids("top", "bottom") if cat == "outerwear" else ids("bottom") if cat == "top" else ids("top")

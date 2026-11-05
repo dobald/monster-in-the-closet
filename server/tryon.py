@@ -212,6 +212,6 @@ class TryOn:
                                             if p["mode"] == "photo" else None, **summary})
             job.update(status="done", render_url=f"/api/renders/{file}", **summary)
         except Exception as e:
-            job.update(status="failed", error=f"{type(e).__name__}: {e}"[:300])
+            job.update(status="failed", error=config.redact(f"{type(e).__name__}: {e}")[:300])
         finally:
             self._running.pop(key, None)

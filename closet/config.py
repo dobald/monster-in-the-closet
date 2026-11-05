@@ -7,6 +7,7 @@ Meta Model API to Baseten-hosted Muse Spark Open is an .env change, not a code c
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -45,6 +46,20 @@ PROVIDERS = {
         "BASETEN_API_KEY",
     ),
 }
+
+
+# Key shapes for the two providers (Baseten "b10_…", Meta "LLM|…"), in case one turns up other than as the exact value.
+_KEY_SHAPES = re.compile(r"b10_[A-Za-z0-9_-]{8,}|LLM\|[A-Za-z0-9_|-]{8,}|LLM_[0-9][A-Za-z0-9_|-]{8,}")
+
+
+def redact(text: str) -> str:
+    """Error text with any API key taken out. Failure messages are stored and shown in the app (a plan's
+    trace, a tag error, a try-on job), and a provider's error can echo the key it was sent."""
+    for p in PROVIDERS.values():
+        key = os.environ.get(p.api_key_env, "")
+        if len(key) >= 8:
+            text = text.replace(key, "[REDACTED]")
+    return _KEY_SHAPES.sub("[REDACTED]", text)
 
 
 def client_for(provider: str = "meta") -> OpenAI:

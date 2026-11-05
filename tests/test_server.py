@@ -1407,6 +1407,106 @@ def test_materials(var_dir: Path) -> None:
         assert C().planning.basis(today_local()) != before
 
 
+def test_final_checks(var_dir: Path) -> None:
+    """Found by the pre-deploy stress run: visitors writing the same cache entry at once, calendar files with
+    unreadable times, oversized input, and picture redraws the spend cap didn't count."""
+    import threading
+    from datetime import date as d
+
+    from closet import tools
+    from server.cache import Cache
+
+    # Many visitors loading the sample closet at once all write the same cache keys.
+    cache, errors = Cache(var_dir / "race"), []
+
+    def put(n: int) -> None:
+        try:
+            for _ in range(20):
+                cache.put("tags", "same", {"n": n, "pad": "x" * 2000})
+        except Exception as e:  # noqa: BLE001
+            errors.append(e)
+    threads = [threading.Thread(target=put, args=(n,)) for n in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert not errors and cache.get("tags", "same")["pad"] == "x" * 2000, errors[:1]
+    assert not list((var_dir / "race" / "tags").glob("*.tmp")), "no temp files left behind"
+
+    # An event with an unreadable time is skipped; the rest of the calendar still works.
+    stamp = d.today().strftime("%Y%m%d")
+    ics = ("BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nDTSTART:" + stamp + "T999999\r\nSUMMARY:Broken\r\nEND:VEVENT\r\n"
+           "BEGIN:VEVENT\r\nDTSTART:" + stamp + "\r\nRRULE:FREQ=WEEKLY;UNTIL=garbage\r\nSUMMARY:Bad rule\r\nEND:VEVENT\r\n"
+           "BEGIN:VEVENT\r\nDTSTART:" + stamp + "T190000\r\nSUMMARY:Dinner\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n").encode()
+    assert {e["title"] for e in tools.ics_events(ics, d.today())} == {"Bad rule", "Dinner"}
+    only_bad = ("BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nDTSTART:" + stamp + "T999999\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n").encode()
+    assert tools.ics_count(only_bad) == 0
+
+    # A provider error that echoes a key never reaches the app; plain text about "LLMs" is left alone.
+    os.environ["MODEL_API_KEY"] = "LLM|1234567890|abcdefghijklmnop"
+    try:
+        msg = config.redact("401: bad key LLM|1234567890|abcdefghijklmnop, also b10_abcdefghijklmnop")
+        assert "abcdefghijklmnop" not in msg and msg.count("[REDACTED]") == 2, msg
+        assert config.redact("LLMs are hard") == "LLMs are hard"
+    finally:
+        os.environ["MODEL_API_KEY"] = "offline-tests"
+
+    with client_for("fixture", var_dir / "limits") as c:
+        h = c.get("/api/ping").headers
+        assert h["x-content-type-options"] == "nosniff" and h["x-frame-options"] == "DENY", dict(h)
+        assert "frame-ancestors 'none'" in h["content-security-policy"] and h["referrer-policy"] == "same-origin"
+        c.post("/api/closet/sample")
+        r = c.post("/api/profile/calendar", files={"file": ("c.ics", ics, "text/calendar")})
+        assert r.status_code == 200 and r.json()["events"] == 2, r.text
+        c.put("/api/profile", json={"calendar": "ics"})
+        assert c.get("/api/occasions").status_code == 200 and c.post("/api/plan", json={"fresh": True}).status_code == 200
+        assert c.post("/api/profile/calendar", files={"file": ("c.ics", only_bad, "text/calendar")}).status_code == 422
+
+        # Oversized or out-of-range input is a 4xx before it reaches a prompt or the database.
+        plan = c.post("/api/plan", json={}).json()
+        item = c.get("/api/wardrobe").json()[0]
+        assert c.post("/api/plan", content=b" " * (2 * 2**20), headers={"content-type": "application/json"}).status_code == 413
+        for path, body in [("/api/plan", {"notes": "x" * 501}), ("/api/plan", {"lat": 400, "lon": 0}),
+                           (f"/api/plans/{plan['id']}/wear", {"look": -1}),
+                           ("/api/checkins", {"temperature": "cold", "feeling": "good", "tags": ["x"] * 21}),
+                           ("/api/thrift", {"piece": {"name": "n" * 200}}), ("/api/thrift/example", {"name": "n" * 200}),
+                           ("/api/preferences", {"text": "fine", "applies_when": "w" * 500})]:
+            assert c.post(path, json=body).status_code == 422, (path, str(body)[:40])
+        assert c.get(f"/api/plans/{plan['id']}/touches?look=-1").status_code == 422
+        assert c.patch(f"/api/wardrobe/{item['id']}", json={"warmth": 9}).status_code == 422
+        assert c.patch(f"/api/wardrobe/{item['id']}", json={"fit": "f" * 300}).status_code == 422
+        assert c.patch(f"/api/wardrobe/{item['id']}", json={"warmth": 2}).status_code == 200
+
+        # Thrift never suggests buying a fabric they won't wear (the rule finder used to offer a wool overcoat).
+        assert "Wool overcoat" in [p["name"] for p in c.post("/api/gaps", json={"fresh": True}).json()["pieces"]]
+        c.put("/api/profile", json={"materials": {"avoid": ["wool"]}})
+        names = [p["name"] for p in c.post("/api/gaps", json={"fresh": True}).json()["pieces"]]
+        assert names and not any("wool" in n.lower() or "merino" in n.lower() for n in names), names
+
+        # Planning for an interview suits the interview first: the 400-day jeans used to win look A on rescue alone.
+        p = c.post("/api/occasions/plan", json={"event": {"title": "Job interview at a bank", "start": "10:00"}, "fresh": True}).json()
+        core = [i["tags"] for i in p["looks"][0]["items"] if i["tags"]["category"] in ("top", "bottom")]
+        assert all(t["formality"] != "casual" for t in core), [t["subtype"] for t in core]
+
+    # A redraw after a tag edit, or on request, counts against the cap like any paid call.
+    os.environ.update({"MONSTER_CLOSET_DAILY_CALLS": "1", "MONSTER_CLOSETS": "device"})
+    try:
+        with client_for("live", var_dir / "redraw") as c:
+            c.post("/api/closet/sample")
+            a, b = c.get("/api/wardrobe").json()[:2]
+            assert c.patch(f"/api/wardrobe/{a['id']}", json={"primary_color": "navy"}).status_code == 200
+            assert c.get("/api/health").json()["budget_left"] == 0, "the first redraw was counted"
+            assert c.patch(f"/api/wardrobe/{b['id']}", json={"primary_color": "navy"}).status_code == 200, "the edit still saves"
+            note = json.loads((main.app.state.products.dir / f"{b['id']}.json").read_text())
+            assert "limit" in note["reason"], note
+            c.post("/api/products")
+            assert b["id"] not in main.app.state.products._tasks, "and POST /api/products can't redraw it for free"
+            assert c.post(f"/api/wardrobe/{b['id']}/photo", json={"use": "redraw"}).status_code == 429
+    finally:
+        for k in ("MONSTER_CLOSET_DAILY_CALLS", "MONSTER_CLOSETS"):
+            os.environ.pop(k, None)
+
+
 def main_() -> None:
     tmp = Path(tempfile.mkdtemp(prefix="monster-test-"))
     run_dir = config.ROOT / "out" / f"_test_seed_{tmp.name}"
@@ -1447,8 +1547,9 @@ def main_() -> None:
         test_scan_fixes(tmp / "scanfix")
         test_round_two(tmp / "round2")
         test_materials(tmp / "materials")
+        test_final_checks(tmp / "final")
         print("OK: fixture mode, seeding, tag fixes, caching, dedupe, planning, wear, check-ins, the agent loop, gap finder, try-on, layered try-on, getting started, finishing touches, colour reads, "
-              "cross-photo duplicates, per-device closets, the sample closet, plans made ahead, the morning wear question, the taste model, outfit scoring, style archetypes, product shots, occasions, calendar links, the spend cap, app serving, layer occlusion, item corrections the public-deploy hardening and the scan fixes all behave.")
+              "cross-photo duplicates, per-device closets, the sample closet, plans made ahead, the morning wear question, the taste model, outfit scoring, style archetypes, product shots, occasions, calendar links, the spend cap, app serving, layer occlusion, item corrections, the public-deploy hardening, the scan fixes and the pre-deploy stress fixes all behave.")
     finally:
         shutil.rmtree(run_dir, ignore_errors=True)
         shutil.rmtree(tmp, ignore_errors=True)

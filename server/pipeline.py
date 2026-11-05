@@ -112,7 +112,7 @@ class Pipeline:
             try:
                 garment = await asyncio.to_thread(models.tag_garment, Image.open(io.BytesIO(png)), None, "", notes)
             except Exception as e:  # one bad cutout shouldn't fail the whole scan
-                return None, f"{type(e).__name__}: {e}"[:300]
+                return None, config.redact(f"{type(e).__name__}: {e}")[:300]
         self.cache.put("tags", key, garment.model_dump())
         return garment, None
 

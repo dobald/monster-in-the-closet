@@ -72,6 +72,8 @@ export default function Today({ ctx }: { ctx: AppCtx }) {
       const result = await api.wear(plan.id, lookIndex);
       setWornLook(lookIndex);
       ctx.showWorn(result, plan, lookIndex);
+      // The pieces' wear dates changed: re-read the plan so a just-rescued piece stops saying "260日 UNWORN".
+      api.plan(plan.id).then(setPlan).catch(() => {});
     } catch (e) {
       ctx.toast((e as Error).message);
     } finally {

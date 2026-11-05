@@ -2,7 +2,7 @@ import { Composition, Folder } from "remotion";
 import { SceneText } from "./components/SceneText";
 import { Stamp } from "./components/Stamp";
 import { Backdrop } from "./components/Backdrop";
-import { Demo } from "./Demo";
+import { Demo, DEMO_FRAMES } from "./Demo";
 import { Agent } from "./scenes/Agent";
 import { Dedupe } from "./scenes/Dedupe";
 import { Evening } from "./scenes/Evening";
@@ -20,14 +20,15 @@ import { Shape } from "./scenes/Shape";
 import { Stakes } from "./scenes/Stakes";
 import { Today } from "./scenes/Today";
 
-// Demo length: 3339 frames (1:51.3), cut to the beat of "Local Forecast": see Demo.tsx.
+// Demo length: your 10.2 s intro clip, then 3339 frames (1:51.3) cut to the beat of "Local Forecast":
+// 3646 frames (2:01.5) in all. See Demo.tsx.
 export const RemotionRoot: React.FC = () => {
   return (
     <>
       <Composition
         id="Demo"
         component={Demo}
-        durationInFrames={3339}
+        durationInFrames={DEMO_FRAMES}
         fps={30}
         width={1920}
         height={1080}

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import uuid
 from pathlib import Path
 
 from closet import config, scan
@@ -42,9 +43,16 @@ class Cache:
     def put(self, kind: str, key: str, value: dict) -> None:
         p = self._path(kind, key)
         p.parent.mkdir(parents=True, exist_ok=True)
-        tmp = p.with_suffix(".tmp")
+        # A temp file of its own per write: two visitors loading the sample closet at once write the same key,
+        # and a shared .tmp let one truncate the other's half-written file (or rename it away first).
+        tmp = p.with_name(f"{p.stem}.{uuid.uuid4().hex[:8]}.tmp")
         tmp.write_text(json.dumps(value, indent=1))
-        tmp.replace(p)
+        try:
+            tmp.replace(p)
+        except PermissionError:  # Windows: another thread is reading p; its copy is the same content-addressed value
+            tmp.unlink(missing_ok=True)
+            if not p.exists():
+                raise
 
     def keys(self, kind: str) -> list[str]:
         d = self.root / kind

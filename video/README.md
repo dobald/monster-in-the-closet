@@ -24,6 +24,18 @@ npm run dev        # Remotion Studio (or the "video" launch config, on :3000)
   - `Phone`: tilts in, floats, and swipes between `screens`. `zoom` with `focus`, `travel` and `spotlight` brings the whole phone toward the camera around one detail. `Tap` draws a finger tap on it.
   - `NorenTransition`: the curtain transition.
 
+## Intro clip
+
+The video opens with your clip, `public/intro/intro.mp4`. It plays until you say "Monster in the closet", and the demo cuts in on that line. Your voice keeps going under the first scene. The clip's own black section covers "damn, I'm getting there".
+
+`intro.mp4` is made from `Video Intro.mov`, which is a 4K HDR HEVC file. Chrome can't reliably decode that format, so the copy is 1080p, tone-mapped to SDR H.264, with the voice levelled to -13 LUFS. Neither file is committed, because the repo ignores `*.mov` and `*.mp4`. To remake the copy after re-exporting the clip:
+
+```bash
+npx remotion ffmpeg -i "Video Intro.mov" -vf "zscale=t=linear:npl=203:tin=arib-std-b67:min=bt2020nc:pin=bt2020,format=gbrpf32le,zscale=p=bt709,tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv,format=yuv420p,scale=1920:1080:flags=lanczos" -af "loudnorm=I=-13:TP=-1:LRA=7" -ar 48000 -c:v libx264 -crf 17 -c:a aac -b:a 192k -movflags +faststart public/intro/intro.mp4
+```
+
+If the timing of your lines changes, update `INTRO` (the frame the demo cuts in on), `CLIP` (the clip's full length) and `MUSIC_TRIM` in `src/Demo.tsx`. The comment there explains how to keep the music on the beat.
+
 ## Music
 
 "Local Forecast" by Kevin MacLeod, in `public/audio/local-forecast.mp3` (from incompetech.com). It is free under Creative Commons Attribution 4.0, which requires this credit. It is on the end card; put it in the video description too:
@@ -35,7 +47,7 @@ Licensed under Creative Commons: By Attribution 4.0
 http://creativecommons.org/licenses/by/4.0/
 ```
 
-The edit is cut to its beat: 92.99 bpm with the first beat at 0.313 s (measured from the audio), so one beat is 19.36 frames. Every transition starts on a beat, and the oni's landing, "STARVES", the bite and the "fed" moment land on beats too. The music plays at 80 % and fades out over the last 3 s. Once the voiceover is in, lower the music under it with the `volume` curve on the `Music: Local Forecast` audio in `src/Demo.tsx`.
+The edit is cut to its beat: 92.99 bpm with the first beat at 0.313 s (measured from the audio), so one beat is 19.36 frames. Every transition starts on a beat, and the oni's landing, "STARVES", the bite and the "fed" moment land on beats too. The music starts on the first frame of the intro, 3 frames into the track, so the demo cuts in exactly 16 beats later and stays on the grid. It sits at 10 % under your intro voice, rises to 80 % once you stop talking, and fades out over the last 3 s. For more voiceover later, add another low stretch to the `volume` curve on the `Music: Local Forecast` audio in `src/Demo.tsx` (`DUCKED` is the level used under your voice).
 
 ## Rendering
 
