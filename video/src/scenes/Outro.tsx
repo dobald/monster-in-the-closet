@@ -47,6 +47,36 @@ const OutroInner = () => {
           />
         </Interactive.Div>
 
+        {/* The maker's byline: a kicker that types itself, like every scene's (STYLE.md). */}
+        <Interactive.Div
+          name="Byline"
+          style={{
+            position: "absolute",
+            left: 780,
+            top: 176,
+            fontFamily: mono,
+            fontSize: 28,
+            letterSpacing: "0.12em",
+            color: "#a39a8e",
+          }}
+        >
+          {(() => {
+            const text = "BY DONALD PHAN";
+            const typed = Math.floor(
+              interpolate(frame, [0.3 * fps, 0.8 * fps], [0, text.length], {
+                extrapolateLeft: "clamp",
+                extrapolateRight: "clamp",
+              }),
+            );
+            // "BY" stays muted; the name is in ink.
+            return (
+              <>
+                {text.slice(0, Math.min(typed, 3))}
+                <span style={{ color: "#ede6da" }}>{text.slice(3, typed)}</span>
+              </>
+            );
+          })()}
+        </Interactive.Div>
         <Interactive.Div
           name="Outro title"
           style={{
