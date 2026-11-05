@@ -261,7 +261,8 @@ const DedupeInner = () => {
               ),
             }}
           >
-            =1
+            {/* The display face's space is too narrow at this size to read as a gap. */}
+            =<span style={{ marginLeft: "0.3em" }}>1</span>
           </div>
         </Interactive.Div>
 

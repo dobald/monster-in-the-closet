@@ -47,7 +47,7 @@ const ShapeInner = () => {
           style={{
             position: "absolute",
             left: 200,
-            top: 380,
+            top: 350,
             width: 461,
             height: 428,
             // A light photo slot behind the black tee, so it shows on the dark ground.
@@ -143,7 +143,7 @@ const ShapeInner = () => {
           style={{
             position: "absolute",
             left: 710,
-            top: 480,
+            top: 450,
             color: "#ede6da",
             opacity: interpolate(frame, [3.1 * fps, 3.4 * fps], [0, 1], {
               extrapolateLeft: "clamp",
@@ -179,7 +179,7 @@ const ShapeInner = () => {
           style={{
             position: "absolute",
             left: 1080,
-            top: 410,
+            top: 380,
             width: 300,
             height: 300,
             rotate: "8deg",
@@ -210,7 +210,7 @@ const ShapeInner = () => {
           style={{
             position: "absolute",
             left: 1430,
-            top: 480,
+            top: 450,
             color: "#ede6da",
             opacity: interpolate(frame, [5.2 * fps, 5.6 * fps], [0, 1], {
               extrapolateLeft: "clamp",
@@ -240,7 +240,7 @@ const ShapeInner = () => {
           style={{
             position: "absolute",
             left: 120,
-            top: 850,
+            top: 900,
             width: 1680,
             height: 26,
             border: "3px solid #ede6da",
