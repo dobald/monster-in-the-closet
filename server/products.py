@@ -36,10 +36,11 @@ class Products:
     def url(self, item_id: str) -> str | None:
         return f"/api/products/{item_id}.webp" if (self.dir / f"{item_id}.webp").exists() else None
 
-    def use_scan(self, item_id: str) -> None:
-        """The owner prefers their own scan to the redraw (it lost a detail, say): never redraw it on its own again."""
+    def use_scan(self, item_id: str, reason: str = "the owner chose their scan") -> None:
+        """Show the scan, and never redraw it on its own again: the owner prefers it (the redraw lost a detail,
+        say), or today's spend cap was reached."""
         self.forget(item_id)
-        self._note(item_id, ok=False, reason="the owner chose their scan")
+        self._note(item_id, ok=False, reason=reason)
 
     def forget(self, item_id: str) -> None:
         """Drop an item's product shot (its tags changed), so the next start() makes a new one."""
@@ -111,4 +112,4 @@ class Products:
             shot.save(self.dir / f"{item_id}.webp", format="WEBP", quality=85, method=6)
             self._note(item_id, ok=True, drift=round(drift, 1), details=check.real_details[:300] if check else None)
         except (Exception, SystemExit) as e:  # noqa: BLE001  one bad item (or a missing API key) shouldn't stop the rest
-            self._note(item_id, ok=False, reason=f"{type(e).__name__}: {e}"[:300])
+            self._note(item_id, ok=False, reason=config.redact(f"{type(e).__name__}: {e}")[:300])

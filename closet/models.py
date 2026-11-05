@@ -259,7 +259,7 @@ def _edit(images: list[Image.Image], prompt: str) -> tuple[Image.Image | None, s
             err = {"message": r.text[:300]}
         code = err.get("code") if isinstance(err, dict) else None
         msg = err.get("message", str(err)) if isinstance(err, dict) else str(err)
-        msg = re.sub(r"data:[^\"' ]{40,}", "data:…", msg)[:300]  # never echo image bytes back
+        msg = config.redact(re.sub(r"data:[^\"' ]{40,}", "data:…", msg))[:300]  # never echo image bytes (or a key) back
         if code == "content_policy_violation":
             return None, f"refused (content_policy_violation): {msg}"
         return None, f"error ({r.status_code}{', ' + code if code else ''}): {msg}"
@@ -283,7 +283,7 @@ def generate_image(prompt: str) -> tuple[Image.Image | None, str]:
             err = r.json().get("error", r.json())
         except ValueError:
             err = {"message": r.text[:300]}
-        msg = err.get("message", str(err)) if isinstance(err, dict) else str(err)
+        msg = config.redact(err.get("message", str(err)) if isinstance(err, dict) else str(err))
         refused = isinstance(err, dict) and err.get("code") == "content_policy_violation"
         return None, f"{'refused' if refused else 'error'} ({r.status_code}): {msg[:300]}"
     item = r.json()["data"][0]

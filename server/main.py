@@ -8,6 +8,7 @@ Interactive docs at http://127.0.0.1:8000/docs
 
 from __future__ import annotations
 
+import json
 import os
 import re
 from contextlib import asynccontextmanager
@@ -15,9 +16,9 @@ from contextlib import asynccontextmanager
 import httpx
 from datetime import date, timedelta
 from pathlib import Path
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, RedirectResponse
 from PIL import Image, UnidentifiedImageError
@@ -100,9 +101,19 @@ class ScanOut(BaseModel):
     warnings: list[str] = []  # e.g. light clothes on a light background
 
 
+# Size limits on what people type: free text goes into model prompts (and is paid for by the token), so a
+# pasted novel or a script sending megabytes is refused instead of planned with.
+Id = Annotated[str, Field(max_length=64)]
+Short = Annotated[str, Field(max_length=60)]
+NOTES = 500
+Lat = Annotated[float, Field(ge=-90, le=90)]
+Lon = Annotated[float, Field(ge=-180, le=180)]
+Look = Annotated[int, Field(ge=0, le=9)]
+
+
 class PairIn(BaseModel):
-    a: str
-    b: str
+    a: Id
+    b: Id
 
 
 class SeedIn(BaseModel):
@@ -111,9 +122,9 @@ class SeedIn(BaseModel):
 
 class PlanIn(BaseModel):
     day: date | None = None  # default: today
-    notes: str = ""  # e.g. "nothing black, dinner moved inside"
-    lat: float | None = None
-    lon: float | None = None
+    notes: str = Field("", max_length=NOTES)  # e.g. "nothing black, dinner moved inside"
+    lat: Lat | None = None
+    lon: Lon | None = None
     fresh: bool = False  # ignore the cached plan for identical inputs
 
 
@@ -128,7 +139,7 @@ class EventIn(BaseModel):
 class OccasionIn(BaseModel):
     day: date | None = None  # default: today
     event: EventIn  # from the calendar, or one the user typed ("job interview")
-    notes: str = ""
+    notes: str = Field("", max_length=NOTES)
     fresh: bool = False
 
 
@@ -137,17 +148,17 @@ class CalendarLinkIn(BaseModel):
 
 
 class WearIn(BaseModel):
-    look: int = 0
+    look: Look = 0
     day: date | None = None
 
 
 class CheckinIn(BaseModel):
     day: date | None = None
-    plan_id: str | None = None
+    plan_id: Id | None = None
     temperature: Literal["cold", "just_right", "warm"]
     feeling: Literal["meh", "fine", "good", "iconic"]
-    tags: list[str] = []  # e.g. ["compliments", "rained on"]
-    note: str = ""  # free text, e.g. a voice transcript
+    tags: list[Short] = Field([], max_length=20)  # e.g. ["compliments", "rained on"]
+    note: str = Field("", max_length=2000)  # free text, e.g. a voice transcript
 
 
 @asynccontextmanager
@@ -162,12 +173,85 @@ async def lifespan(app: FastAPI):
     yield
 
 
+MAX_SCAN_BYTES = 150 * 1024 * 1024  # a whole scan: ten big phone photos, with room to spare
+MAX_UPLOAD_BYTES = MAX_PHOTO_BYTES + 1024 * 1024  # one photo or calendar file, plus the form around it
+MAX_JSON_BYTES = 1024 * 1024
+
+
+class BodyLimitMiddleware:
+    """Refuse oversized request bodies before they are read. Uvicorn has no limit of its own, and an upload is
+    read into memory whole: on a 1 GB machine a single 2 GB request (or a few big ones at once) would kill it."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http" or scope["method"] in ("GET", "HEAD", "OPTIONS"):
+            return await self.app(scope, receive, send)
+        headers = dict(scope.get("headers") or [])
+        multipart = headers.get(b"content-type", b"").startswith(b"multipart/")
+        limit = MAX_SCAN_BYTES if scope["path"] == "/api/scans" else MAX_UPLOAD_BYTES if multipart else MAX_JSON_BYTES
+        try:
+            declared = int(headers.get(b"content-length", b"0"))
+        except ValueError:
+            declared = 0
+        if declared > limit:
+            body = b'{"detail":"That upload is too big. Send fewer or smaller photos."}'
+            await send({"type": "http.response.start", "status": 413,
+                        "headers": [(b"content-type", b"application/json"), (b"content-length", str(len(body)).encode())]})
+            return await send({"type": "http.response.body", "body": body})
+        seen = 0
+
+        async def capped():  # no Content-Length (a chunked upload): count as it arrives
+            nonlocal seen
+            message = await receive()
+            seen += len(message.get("body", b""))
+            if seen > limit:
+                raise HTTPException(413, "That upload is too big. Send fewer or smaller photos.")
+            return message
+
+        await self.app(scope, capped, send)
+
+
+SECURITY_HEADERS = [
+    (b"x-content-type-options", b"nosniff"),  # an upload is never run as a script or page
+    (b"x-frame-options", b"DENY"),  # no other site can frame the app and trick a tap on "remove"
+    (b"referrer-policy", b"same-origin"),  # eBay or Depop never see a closet link's address
+    (b"permissions-policy", b"camera=(self), microphone=(self), geolocation=(self)"),
+    (b"content-security-policy", b"frame-ancestors 'none'; object-src 'none'; base-uri 'self'"),
+]
+
+
+class SecurityHeadersMiddleware:
+    """Browser-side protections on every response; HSTS too once the request came in over https (Fly)."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            return await self.app(scope, receive, send)
+        https = scope.get("scheme") == "https"
+
+        async def send_with_headers(message):
+            if message["type"] == "http.response.start":
+                headers = message.setdefault("headers", [])
+                headers.extend(SECURITY_HEADERS)
+                if https:
+                    headers.append((b"strict-transport-security", b"max-age=15552000"))
+            await send(message)
+
+        await self.app(scope, receive, send_with_headers)
+
+
 app = FastAPI(title="Monster in the Closet API", version="0.1.0", lifespan=lifespan)
 if os.environ.get("MONSTER_CORS_ORIGINS"):  # only for a front end served from another origin
     app.add_middleware(CORSMiddleware, allow_origins=os.environ["MONSTER_CORS_ORIGINS"].split(","),
                        allow_methods=["*"], allow_headers=["*"], allow_credentials=True)
 app.add_middleware(BudgetMiddleware)  # runs inside ClosetMiddleware, so it knows the closet
-app.add_middleware(ClosetMiddleware)  # added last, so it runs first
+app.add_middleware(ClosetMiddleware)
+app.add_middleware(BodyLimitMiddleware)  # nothing is read or counted before it
+app.add_middleware(SecurityHeadersMiddleware)  # added last, so it runs first: even a 413 carries the headers
 
 
 def C() -> Closet:
@@ -225,6 +309,8 @@ async def create_scan(photos: list[UploadFile] = File(..., description="1-10 fla
         raise HTTPException(422, f"Send 1-{MAX_PHOTOS} photos per scan.")
     batch = []
     for f in photos:
+        if (f.size or 0) > MAX_PHOTO_BYTES:  # checked before reading it into memory
+            raise HTTPException(413, f"{f.filename} is over {MAX_PHOTO_BYTES // 2**20} MB.")
         data = await f.read()
         if len(data) > MAX_PHOTO_BYTES:
             raise HTTPException(413, f"{f.filename} is over {MAX_PHOTO_BYTES // 2**20} MB.")
@@ -300,7 +386,7 @@ def list_wardrobe(category: str | None = None, include_hidden: bool = False) -> 
 
 
 class LastWornIn(BaseModel):
-    id: str
+    id: Id
     days_ago: int | None  # None clears the estimate
 
 
@@ -348,6 +434,8 @@ async def fix_tags(item_id: str, changes: dict[str, Any]) -> ItemOut:  # async: 
         merged = Garment.model_validate({**(item["tags"] or {}), **changes})
     except ValidationError as e:
         raise HTTPException(422, e.errors(include_url=False)) from e
+    if problem := _edit_problem(merged, set(changes)):
+        raise HTTPException(422, problem)
     store.update_tags(item_id, merged)
     if VISUAL & set(changes):
         _redraw(item_id)
@@ -359,16 +447,44 @@ VISUAL = {"category", "subtype", "primary_color", "secondary_colors", "pattern",
           "visible_side", "print_side"}
 
 
-def _redraw(item_id: str) -> None:
+def _edit_problem(g: Garment, fields: set[str]) -> str | None:
+    """Ranges the Garment schema leaves open (it is also the tagger's answer format, and its hash keys the tag
+    cache, so it isn't tightened there): checked on the fields a person edits."""
+    if "warmth" in fields and not 1 <= g.warmth <= 5:
+        return "warmth is 1-5"
+    if "confidence" in fields and not 0 <= g.confidence <= 1:
+        return "confidence is 0-1"
+    for f in fields:
+        v = getattr(g, f)
+        if isinstance(v, str) and len(v) > 200:
+            return f"{f} is too long (200 characters at most)"
+        if isinstance(v, list) and (len(v) > 12 or any(len(x) > 60 for x in v)):
+            return f"{f} has too many entries"
+    return None
+
+
+def _spend() -> bool:
+    """Count one paid call for work no counted request paid for (a redraw after a tag edit, or on request).
+    False when it would go over today's cap, or in demo mode."""
+    budget = app.state.budget
+    return app.state.settings.live and (not budget.capped or budget.spend(current_id()))
+
+
+def _redraw(item_id: str, counted: bool = False) -> None:
     """The item's pictures follow its corrected tags: product shot and dress-up layers are made again
-    (in the background, live mode). In demo mode the old pictures stay rather than vanish."""
+    (in the background, live mode). In demo mode the old pictures stay rather than vanish. Over today's
+    cap the old ones go (they show the wrong thing now) and the scan is shown until tomorrow."""
     if not app.state.settings.live:
         return
     app.state.products.forget(item_id)
     C().layers.forget(item_id)
     item = C().store.get_item(item_id)
-    if item:
+    if not item:
+        return
+    if counted or _spend():
         app.state.products.start([item], C().settings.cutout_dir)
+    else:  # marked as tried, so POST /api/products can't redraw it for free either
+        app.state.products.use_scan(item_id, "today's limit was reached; tap redraw tomorrow")
 
 
 class PhotoChoiceIn(BaseModel):
@@ -387,6 +503,8 @@ async def choose_photo(item_id: str, body: PhotoChoiceIn) -> ItemOut:  # async: 
     else:
         if not app.state.settings.live:
             raise HTTPException(409, "Redrawing needs live mode (it calls Muse Image).")
+        if not _spend():
+            raise HTTPException(429, "That's today's limit for new pictures. Try the redraw again tomorrow.")
         app.state.products.forget(item_id)
         app.state.products.start([item], C().settings.cutout_dir)
     return _item_out(C().store.get_item(item_id))
@@ -405,7 +523,7 @@ async def retag_item(item_id: str, body: RetagIn) -> ItemOut:
         await C().pipeline.retag(item_id, body.hint)
     except FixtureMissing as e:
         raise HTTPException(409, str(e)) from e
-    _redraw(item_id)
+    _redraw(item_id, counted=True)  # this request was counted already (server/budget.py)
     return _item_out(C().store.get_item(item_id))
 
 
@@ -543,7 +661,7 @@ def latest_plan(day: date | None = None) -> dict:
 
 
 class YesterdayIn(BaseModel):
-    look: int | None = None  # the look they wore, or None for "no, something else"
+    look: Look | None = None  # the look they wore, or None for "no, something else"
 
 
 @app.get("/api/yesterday")
@@ -629,9 +747,9 @@ def _with_pairs(piece: dict) -> dict:
 
 
 class ExampleIn(BaseModel):
-    name: str
-    colors: list[str] = []
-    category: str = ""
+    name: str = Field(min_length=1, max_length=80)
+    colors: list[Short] = Field([], max_length=6)
+    category: Short = ""
 
 
 @app.post("/api/thrift/example")
@@ -669,6 +787,8 @@ def add_thrift(body: ThriftIn) -> dict:
     if not body.piece.get("name"):
         raise HTTPException(422, "piece needs a name")
     piece = {k: v for k, v in body.piece.items() if k != "pairs"}
+    if not isinstance(piece["name"], str) or len(piece["name"]) > 80 or len(json.dumps(piece)) > 8000:
+        raise HTTPException(422, "That piece is too big to save.")
     return {"id": C().store.add_thrift(piece, body.status)}
 
 
@@ -690,8 +810,8 @@ class TryOnProfileIn(BaseModel):
 
 
 class TryOnIn(BaseModel):
-    plan_id: str
-    look: int = 0
+    plan_id: Id
+    look: Look = 0
 
 
 @app.get("/api/tryon/profile")
@@ -742,7 +862,7 @@ async def start_tryon(body: TryOnIn) -> dict:  # async: the render job is schedu
 
 
 class LayersIn(BaseModel):
-    item_ids: list[str]
+    item_ids: list[Id] = Field(max_length=1000)  # the app sends the whole closet; only the first 60 are made
     prepare: bool = True  # start making missing layers (live mode only)
 
 
@@ -775,7 +895,7 @@ def layer_file(base_key: str, name: str) -> FileResponse:
 
 
 @app.get("/api/tryon/flatlay")
-def tryon_flatlay(plan_id: str, look: int = 0) -> dict:
+def tryon_flatlay(plan_id: str, look: Annotated[int, Query(ge=0, le=9)] = 0) -> dict:
     """The always-exact flat-lay of a look, without starting a render."""
     try:
         _, items = C().tryon._look(plan_id, look)
@@ -824,9 +944,9 @@ def render_file(name: str) -> FileResponse:
 
 
 class Location(BaseModel):
-    name: str
-    lat: float
-    lon: float
+    name: str = Field(max_length=120)
+    lat: Lat
+    lon: Lon
 
 
 MaterialFamily = Literal["cotton", "denim", "linen", "wool", "silk", "leather", "fleece", "synthetic"]
@@ -845,8 +965,8 @@ class ProfileIn(BaseModel):
 
 
 class PreferenceIn(BaseModel):
-    text: str
-    applies_when: str | None = None
+    text: str = Field(max_length=400)
+    applies_when: str | None = Field(None, max_length=120)
 
 
 MAX_ICS_BYTES = 2 * 1024 * 1024
@@ -867,7 +987,7 @@ def _profile_out() -> dict:
 
 
 class ClosetIn(BaseModel):
-    id: str
+    id: Id
 
 
 @app.get("/api/closet")
@@ -1029,22 +1149,22 @@ def add_preference(body: PreferenceIn) -> dict:
 
 
 class StyleIn(BaseModel):
-    basics: list[str] | None = None  # keys from GET /api/style catalog
-    skip: list[str] | None = None  # playbook ids the user said aren't their style
+    basics: list[Short] | None = Field(None, max_length=100)  # keys from GET /api/style catalog
+    skip: list[Short] | None = Field(None, max_length=200)  # playbook ids the user said aren't their style
 
 
 class CorrectIn(BaseModel):
-    feature: str
+    feature: str = Field(max_length=80)
     value: float  # +1 "that's me", -1 "not me"
 
 
 class QuizAnswer(BaseModel):
-    picked: list[str]
-    other: list[str]
+    picked: list[Id] = Field(max_length=12)
+    other: list[Id] = Field(max_length=12)
 
 
 class QuizIn(BaseModel):
-    answers: list[QuizAnswer]
+    answers: list[QuizAnswer] = Field(max_length=50)
 
 
 @app.get("/api/taste")
@@ -1077,12 +1197,12 @@ def answer_taste_quiz(body: QuizIn) -> dict:
 
 
 class StyleAnswer(BaseModel):
-    picked: str
-    other: str
+    picked: Short
+    other: Short
 
 
 class StyleQuizIn(BaseModel):
-    answers: list[StyleAnswer]
+    answers: list[StyleAnswer] = Field(max_length=50)
 
 
 @app.get("/api/styles/quiz")
@@ -1121,7 +1241,7 @@ def put_style(body: StyleIn) -> dict:
 
 
 @app.get("/api/plans/{plan_id}/touches")
-async def look_touches(plan_id: str, look: int = 0) -> dict:
+async def look_touches(plan_id: str, look: Annotated[int, Query(ge=0, le=9)] = 0) -> dict:
     """Finishing touches for one look: underlayers, accessories and small techniques from the styling
     playbook, using basics the user owns first. Never a shopping suggestion."""
     try:

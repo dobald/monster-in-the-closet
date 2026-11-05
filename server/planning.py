@@ -225,14 +225,14 @@ class Planning:
         if cached:
             plan, trace, source = OutfitPlan.model_validate(cached["plan"]), {**cached["trace"], "cached": True}, "cache"
         elif self.settings.live:
-            plan, trace, source = await self._live_plan(items, prefs, day, notes, weather, calendar, scorer)
+            plan, trace, source = await self._live_plan(items, prefs, day, notes, weather, calendar, scorer, not event)
             self.cache.put("plans", key, {"plan": plan.model_dump(), "trace": trace})
         else:
-            plan = planner.plan_with_rules(items, weather, calendar, notes, day, scorer)
+            plan = planner.plan_with_rules(items, weather, calendar, notes, day, scorer, not event)
             trace, source = {"provider": "rules", "reason": "fixture mode",
                              "steps": planner.rule_steps(items, prefs, weather, calendar, notes, plan, "Fixture mode: no model calls")}, "rules"
 
-        plan = self._rank(planner.distinct_looks(plan), scorer)
+        plan = self._rank(planner.distinct_looks(plan), scorer, not event)  # for an event: suit it first
         plan, trace = self._with_taste(plan, dict(trace), items, day, weather, model, scorer, picture["grow"], bool(event))
         trace = {**trace, "basis": self.basis(day), **({"prebuilt": True} if prebuilt else {})}
         record = {"id": uuid.uuid4().hex[:12], "day": day.isoformat(), "created_at": now(), "source": source,
@@ -241,7 +241,8 @@ class Planning:
         self.store.add_plan(record)
         return record
 
-    async def _live_plan(self, items, prefs, day, notes, weather, calendar, scorer=None) -> tuple[OutfitPlan, dict, str]:
+    async def _live_plan(self, items, prefs, day, notes, weather, calendar, scorer=None,
+                         rescue_first: bool = True) -> tuple[OutfitPlan, dict, str]:
         tool_impls = {"get_weather": lambda: weather, "get_calendar": lambda: calendar}
         failures = []
         providers = [config.PLAN_PROVIDER] + [p for p in ("meta",) if p != config.PLAN_PROVIDER]
@@ -251,8 +252,8 @@ class Planning:
                     planner.plan_with_agent, items, prefs, day, notes, tool_impls, provider)
                 return plan, {**trace, "failures": failures}, "agent"
             except Exception as e:
-                failures.append(f"{provider}: {type(e).__name__}: {e}"[:300])
-        plan = planner.plan_with_rules(items, weather, calendar, notes, day, scorer)
+                failures.append(config.redact(f"{provider}: {type(e).__name__}: {e}")[:300])
+        plan = planner.plan_with_rules(items, weather, calendar, notes, day, scorer, rescue_first)
         steps = planner.rule_steps(items, prefs, weather, calendar, notes, plan, "The models didn't answer, so the rules stepped in")
         return plan, {"provider": "rules", "failures": failures, "steps": steps}, "rules"
 
@@ -365,7 +366,7 @@ class Planning:
                     trace = {**t, "failures": trace["failures"]}
                     break
                 except Exception as e:
-                    trace["failures"].append(f"{provider}: {type(e).__name__}: {e}"[:300])
+                    trace["failures"].append(config.redact(f"{provider}: {type(e).__name__}: {e}")[:300])
             if learned is None:
                 learned, trace = planner.learn_with_rules(answers, weather), {**trace, "provider": "rules"}
             self.cache.put("checkins", key, {"learned": learned.model_dump(), "trace": trace})
@@ -398,6 +399,7 @@ class Planning:
         thrift = self.store.list_thrift()
         watching = [t["name"] for t in thrift if t["status"] == "watching"]
         dismissed = [t["name"] for t in thrift if t["status"] == "dismissed"]
+        avoid = set(self.fabrics()["avoid"])  # never suggest buying a fabric they won't wear
         weather = self.weather(day, *self.location())
         parts = (weather.get("parts") or {}).values()
         note = (f"{min(t for p in parts for t in p['temp_c'])}-{max(t for p in parts for t in p['temp_c'])}°C, "
@@ -416,16 +418,16 @@ class Planning:
                 try:
                     report, t = await asyncio.to_thread(gaps.find_gaps_with_agent, items, prefs, day, note,
                                                         watching, dismissed, provider)
-                    pieces = gaps.clean_report(report, items)
+                    pieces = gaps.clean_report(report, items, avoid)
                     if pieces:
                         trace, source, summary = {**t, "failures": trace["failures"]}, "agent", report.summary
                         break
                     trace["failures"].append(f"{provider}: no usable pieces")
                 except Exception as e:
-                    trace["failures"].append(f"{provider}: {type(e).__name__}: {e}"[:300])
+                    trace["failures"].append(config.redact(f"{provider}: {type(e).__name__}: {e}")[:300])
         if not pieces:
-            report = gaps.find_gaps_with_rules(items, dismissed, watching)
-            pieces, summary = gaps.clean_report(report, items), report.summary
+            report = gaps.find_gaps_with_rules(items, dismissed, watching, avoid)
+            pieces, summary = gaps.clean_report(report, items, avoid), report.summary
             trace = {**trace, "provider": "rules"}
         record = {"created_at": now(), "source": source, "summary": summary, "pieces": pieces, "trace": trace}
         if source == "agent":
@@ -485,12 +487,12 @@ class Planning:
             return scoring.breakdown(outfit, read, ctx, day, model.utility(taste.vector(outfit, read)) if model.n else 0.0, fabrics)
         return score
 
-    def _rank(self, plan: OutfitPlan, scorer) -> OutfitPlan:
+    def _rank(self, plan: OutfitPlan, scorer, rescue_first: bool = True) -> OutfitPlan:
         """Looks A and B by the shared score, whoever proposed them; the rest follow, best first."""
         by_id = {i["id"]: i for i in self._garments()}
         outfits = [[by_id[i] for i in lk.item_ids if i in by_id] for lk in plan.looks]
         scored = [(o, scorer(o)) for o in outfits]
-        top = scoring.pick_two(scored)
+        top = scoring.pick_two(scored, rescue_first)
         rest = sorted((n for n in range(len(plan.looks)) if n not in top), key=lambda n: -scored[n][1]["total"])
         plan.looks = [plan.looks[n] for n in top + rest]
         return plan
@@ -780,7 +782,7 @@ class Planning:
                         break
                     trace["failures"].append(f"{provider}: no usable touches")
                 except Exception as e:
-                    trace["failures"].append(f"{provider}: {type(e).__name__}: {e}"[:300])
+                    trace["failures"].append(config.redact(f"{provider}: {type(e).__name__}: {e}")[:300])
         if not touches:
             touches = styling.touches_with_rules(items, cold, smart, owned, skip, read["idea_play"])
             trace = {**trace, "provider": "rules"}

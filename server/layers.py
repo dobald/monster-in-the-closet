@@ -253,7 +253,7 @@ class Layers:
             self._put_meta(key, "base", {"status": "ready", "size": list(final.size), "applied": applied,
                                          "seconds": round(time.time() - t0, 1)})
         except Exception as e:
-            self._put_meta(key, "base", {"status": "failed", "error": f"{type(e).__name__}: {e}"[:300]})
+            self._put_meta(key, "base", {"status": "failed", "error": config.redact(f"{type(e).__name__}: {e}")[:300]})
 
     async def _make_layer(self, key: str, body: dict, item: dict) -> None:
         t0 = time.time()
@@ -277,4 +277,4 @@ class Layers:
             self._put_meta(key, item["id"], {"status": "ready", "box": box, "size": list(base.size),
                                              "seconds": round(time.time() - t0, 1)})
         except Exception as e:
-            self._put_meta(key, item["id"], {"status": "failed", "error": f"{type(e).__name__}: {e}"[:300]})
+            self._put_meta(key, item["id"], {"status": "failed", "error": config.redact(f"{type(e).__name__}: {e}")[:300]})

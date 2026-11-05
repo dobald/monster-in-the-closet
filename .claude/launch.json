@@ -38,6 +38,12 @@
       "port": 8100
     },
     {
+      "name": "api-stress",
+      "runtimeExecutable": ".venv/Scripts/python.exe",
+      "runtimeArgs": ["-m", "server.dev", "--public", "--var", "var/stress", "--port", "8200"],
+      "port": 8200
+    },
+    {
       "name": "web",
       "runtimeExecutable": "npm",
       "runtimeArgs": ["--prefix", "web", "run", "dev"],

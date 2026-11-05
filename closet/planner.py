@@ -339,7 +339,7 @@ def distinct_looks(plan: OutfitPlan) -> OutfitPlan:
 
 
 def plan_with_rules(items: list[dict], weather: dict, calendar: dict, notes: str, today: date,
-                    scorer: Callable[[list[dict]], dict] | None = None) -> OutfitPlan:
+                    scorer: Callable[[list[dict]], dict] | None = None, rescue_first: bool = True) -> OutfitPlan:
     """Deterministic picker: warmth from the coldest feels-like, formality from events, forgotten pieces first.
     With `scorer` (closet/scoring.breakdown for this day), looks A and B are chosen from every outfit the
     closet can make by the same score live plans are ranked with: rescue, weather, occasion, colour, taste."""
@@ -374,7 +374,7 @@ def plan_with_rules(items: list[dict], weather: dict, calendar: dict, notes: str
     if scorer:
         cands = [(t, b) for t in tops for b in bottoms] + [(d,) for d in dresses]
         scored = [(list(c) + layer, scorer(list(c) + layer)) for c in cands]
-        combos = [cands[n] for n in scoring.pick_two(scored)]
+        combos = [cands[n] for n in scoring.pick_two(scored, rescue_first)]
     elif tops and bottoms:
         combos = [(tops[0], bottoms[0]), (tops[min(1, len(tops) - 1)], bottoms[min(1, len(bottoms) - 1)])]
     if tops and bottoms:
@@ -445,9 +445,9 @@ def learn_with_rules(checkin: dict, weather: dict) -> CheckinLearning:
     if temp == "cold":
         when = f"evenings with a feels-like low under {low + 2}°C" if low is not None else "cool evenings"
         return CheckinLearning(oni_reply="Noted: you ran cold tonight. Tomorrow I'll add a layer before you ask.",
-                               preference="Add a warmer layer; the user runs cold.", applies_when=when)
+                               preference="Add a warmer layer; I run cold.", applies_when=when)  # onboarding's wording, so it isn't learned twice
     if temp == "warm":
         return CheckinLearning(oni_reply="Too toasty? I'll go lighter next time.",
-                               preference="Choose lighter layers; the user runs warm.", applies_when="mild days")
+                               preference="Choose lighter layers; I run warm.", applies_when="mild days")
     reply = "Perfect. I'll remember this combo works." if checkin.get("feeling") != "iconic" else "Iconic. Noted, and framed."
     return CheckinLearning(oni_reply=reply, preference=None, applies_when=None)

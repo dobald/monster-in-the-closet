@@ -75,19 +75,34 @@ def get_calendar(day: date, path: Path = CALENDAR_PATH) -> dict:
     ]}
 
 
+def _readable(ev) -> bool:
+    """An event whose times can be read. Bad times ("T999999", a made-up time zone) only fail when they are
+    decoded, which used to crash the calendar on every screen that reads it."""
+    try:
+        for prop in ("DTSTART", "DTEND"):
+            if prop in ev:
+                ev[prop].dt  # noqa: B018  a broken time is a vBroken, which raises here
+        return "DTSTART" in ev
+    except Exception:  # noqa: BLE001  icalendar raises ValueError, TypeError or KeyError depending on the field
+        return False
+
+
 def _calendar(data: bytes):
+    """The parsed calendar with unreadable events left out, or None if it isn't a calendar."""
     import icalendar
     try:
-        return icalendar.Calendar.from_ical(data)
-    except ValueError:
+        cal = icalendar.Calendar.from_ical(data)
+    except Exception:  # noqa: BLE001
         return None
+    cal.subcomponents = [c for c in cal.subcomponents if c.name != "VEVENT" or _readable(c)]
+    return cal
 
 
 MAX_EVENTS_PER_DAY = 40
 
 
 def ics_count(data: bytes) -> int:
-    """How many events an .ics file holds (0 if it isn't one)."""
+    """How many usable events an .ics file holds (0 if it isn't one)."""
     cal = _calendar(data)
     return len(cal.walk("VEVENT")) if cal else 0
 
@@ -105,11 +120,20 @@ def ics_events(data: bytes, day: date) -> list[dict]:
     for ev in cal.walk("VEVENT"):
         # An event repeating every hour, minute or second is never a plan to dress for, and expanding
         # one from an uploaded or linked file could take minutes: keep just its first occurrence.
+        # A repeat rule that can't be read ("UNTIL=garbage") goes too: the event is kept once.
         rule = ev.get("RRULE")
-        if rule and str((rule.get("FREQ") or [""])[0]).upper() in ("HOURLY", "MINUTELY", "SECONDLY"):
+        try:
+            fast = rule and str((rule.get("FREQ") or [""])[0]).upper() in ("HOURLY", "MINUTELY", "SECONDLY")
+        except Exception:  # noqa: BLE001  icalendar's BrokenCalendarProperty
+            fast = True
+        if fast:
             del ev["RRULE"]
+    try:
+        found = list(recurring_ical_events.of(cal).at(day))[:MAX_EVENTS_PER_DAY]
+    except Exception:  # noqa: BLE001  a broken repeat rule: plan the day without the calendar rather than fail
+        return []
     out = []
-    for ev in list(recurring_ical_events.of(cal).at(day))[:MAX_EVENTS_PER_DAY]:
+    for ev in found:
         start, end = ev.get("DTSTART"), ev.get("DTEND")
         s, e = (start.dt if start else None), (end.dt if end else None)
         if s is None:

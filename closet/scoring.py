@@ -5,7 +5,8 @@ Spark Open proposes five candidates and this score picks looks A and B from them
 each on a similar scale so none can drown the others (the old rule picker gave half a point
 per idle day, uncapped, so a 400-day coat beat the weather):
 
-- rescue:   up to +3 for the most forgotten piece, capped at 90 days idle
+- rescue:   up to +3 for the most forgotten piece, capped at 90 days idle. Planning for one event it is a
+            small bonus (x0.3): a job interview wants the shirt, not the jeans that haven't been out in a year
 - weather:  outfit warmth against the day's target, a layer when it's cold (and not when it isn't),
             an evening that gets much colder, pale trousers on a rainy day
 - occasion: smart pieces on a day with a dress code, nothing sporty to a crit, not overdressed otherwise.
@@ -31,6 +32,7 @@ NEVER_WORN_DAYS = 30  # no history at all: probably a bit forgotten, not very
 LAYER_BELOW_C = 12
 TASTE_WEIGHT = 1.2
 OCCASION_WEIGHT = 1.5  # planning for one event: suiting it matters more than on an ordinary day
+OCCASION_RESCUE = 0.3  # ...and rescuing a forgotten piece matters less
 
 SCHEME = {"all neutral": 0.6, "neutral + accent": 0.9, "tonal": 0.5, "analogous": 0.6, "complementary": 0.2,
           "contrasting": -0.4}
@@ -85,6 +87,8 @@ def breakdown(outfit: list[dict], read: dict, day: Day, today: date, taste_utili
 
     longest = max((idle_days(i, today) for i in core), default=0)
     rescue = RESCUE_MAX * min(longest, RESCUE_CAP_DAYS) / RESCUE_CAP_DAYS if longest >= RESCUE_FROM_DAYS else 0.0
+    if day.formality is not None:
+        rescue *= OCCASION_RESCUE
 
     main = max((t["warmth"] for t in tags if t["category"] in ("top", "dress")), default=2)
     warmth = main + (0.5 * max(t["warmth"] for t in layers) if layers else 0)
@@ -123,14 +127,14 @@ def breakdown(outfit: list[dict], read: dict, day: Day, today: date, taste_utili
     return {**{k: round(v, 2) for k, v in parts.items()}, "total": round(sum(parts.values()), 2)}
 
 
-def pick_two(scored: list[tuple[list[dict], dict]]) -> list[int]:
-    """Indexes of looks A and B. A is the best look that rescues something (or simply the best);
-    B is the best look that shares no top, bottom or dress with A."""
+def pick_two(scored: list[tuple[list[dict], dict]], rescue_first: bool = True) -> list[int]:
+    """Indexes of looks A and B. A is the best look that rescues something (or simply the best; always
+    the best when planning for one event); B is the best look that shares no top, bottom or dress with A."""
     if not scored:
         return []
     best = lambda idx: max(idx, key=lambda n: scored[n][1]["total"])  # noqa: E731
     everything = range(len(scored))
-    rescuing = [n for n in everything if scored[n][1]["rescue"] > 0]
+    rescuing = [n for n in everything if scored[n][1]["rescue"] > 0] if rescue_first else []
     a = best(rescuing or everything)
     core = lambda n: {i["id"] for i in scored[n][0] if i["tags"]["category"] in ("top", "bottom", "dress")}  # noqa: E731
     apart = [n for n in everything if n != a and not core(n) & core(a)]

@@ -110,7 +110,7 @@ async def segment(
         result = await sp.parse_responses_stream(stream, fmt).final_result()
     except sp.ResponsesStreamLaneError as e:
         # Zero matches can arrive as a stream with no text lane at all.
-        return SegmentationRun(prompt, [], 0, [f"no output lane: {e}"], "no_matches", None)
+        return SegmentationRun(prompt, [], 0, [config.redact(f"no output lane: {e}")], "no_matches", None)
 
     tracks: dict[str, Track] = {}
     per_frame: dict[int, int] = {}
