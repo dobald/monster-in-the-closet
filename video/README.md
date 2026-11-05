@@ -1,6 +1,6 @@
 # Demo video
 
-A 1:51 Remotion video for the hackathon submission: 1920×1080, 30 fps, scored to "Local Forecast" by Kevin MacLeod. Its motion rules (palette, one easing per job, stagger frames, transitions, the oni's acting, the avoid list) are in [STYLE.md](STYLE.md); check new scenes against it.
+A 2:01 Remotion video for the hackathon submission (your 10.2 s intro clip, then 1:51 of demo): 1920×1080, 30 fps, scored to "Local Forecast" by Kevin MacLeod. Its motion rules (palette, one easing per job, stagger frames, transitions, the oni's acting, the avoid list) are in [STYLE.md](STYLE.md); check new scenes against it.
 
 On-screen text is kept to headlines, short labels and numbers, so a voiceover can carry the detail.
 
@@ -13,7 +13,7 @@ npm i
 npm run dev        # Remotion Studio (or the "video" launch config, on :3000)
 ```
 
-- `src/Demo.tsx` is the full timeline: sixteen scenes joined by nine 18-frame irises (`IrisTransition`), two 24-frame noren curtains and four 15-frame wipes or slides. If you change a scene's or a transition's length, change `durationInFrames` of the `Demo` composition in `src/Root.tsx` to match.
+- `src/Demo.tsx` is the full timeline: sixteen scenes joined by nine 18-frame irises (`IrisTransition`), two 24-frame noren curtains and four 15-frame wipes or slides. If you change a scene's or a transition's length, change `MAIN` in the same file to match (`Root.tsx` reads the total from `DEMO_FRAMES`).
 - Each scene in `src/scenes/` is also registered on its own under **Scenes**, so you can open and edit it on its own timeline.
 - `src/Oni.tsx` is the app's oni (`web/src/Oni.tsx`) with its CSS motion swapped for frame-driven motion, plus blinks, `look` (where its eyes point), squash and stretch, `wave` and `chomp`.
 - Shared motion pieces in `src/components/`:
@@ -57,7 +57,7 @@ Only when you want the file:
 npx remotion render Demo out/demo.mp4
 ```
 
-`out/` is git-ignored, as is every `*.mp4` in the repo.
+`out/` is git-ignored, as is every `*.mp4` in the repo except the intro clip.
 
 ## Re-capturing app screens
 
