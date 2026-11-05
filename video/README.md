@@ -28,7 +28,7 @@ npm run dev        # Remotion Studio (or the "video" launch config, on :3000)
 
 The video opens with your clip, `public/intro/intro.mp4`. It plays until you say "Monster in the closet", and the demo cuts in on that line. Your voice keeps going under the first scene. The clip's own black section covers "damn, I'm getting there".
 
-`intro.mp4` is made from `Video Intro.mov`, which is a 4K HDR HEVC file. Chrome can't reliably decode that format, so the copy is 1080p, tone-mapped to SDR H.264, with the voice levelled to -13 LUFS. Neither file is committed, because the repo ignores `*.mov` and `*.mp4`. To remake the copy after re-exporting the clip:
+`intro.mp4` is made from `Video Intro.mov`, which is a 4K HDR HEVC file. Chrome can't reliably decode that format, so the copy is 1080p, tone-mapped to SDR H.264, with the voice levelled to -13 LUFS. The copy is committed (force-added, since the repo ignores `*.mp4`); the original `.mov` is not. To remake the copy after re-exporting the clip:
 
 ```bash
 npx remotion ffmpeg -i "Video Intro.mov" -vf "zscale=t=linear:npl=203:tin=arib-std-b67:min=bt2020nc:pin=bt2020,format=gbrpf32le,zscale=p=bt709,tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv,format=yuv420p,scale=1920:1080:flags=lanczos" -af "loudnorm=I=-13:TP=-1:LRA=7" -ar 48000 -c:v libx264 -crf 17 -c:a aac -b:a 192k -movflags +faststart public/intro/intro.mp4
